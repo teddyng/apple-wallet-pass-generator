@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Wallet Pass Studio</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/theme.js" defer></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="title-block">
+          <span class="eyebrow">Apple Wallet</span>
+          <h1>Wallet Pass Studio</h1>
+        </div>
+        <div class="top-actions">
+          <a class="secondary-button is-hidden" id="adminLink" href="/admin">Admin</a>
+          <button class="secondary-button" type="button" data-theme-toggle>Dark mode</button>
+          <a class="secondary-button" href="/logout">Sign out</a>
+          <button class="primary-button" id="generateButton" type="button">
+            <span aria-hidden="true">↓</span>
+            Generate .pkpass
+          </button>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <form class="editor" id="passForm">
+          <div class="tabs" role="tablist" aria-label="Pass editor sections">
+            <button type="button" class="tab is-active" data-tab="details">Details</button>
+            <button type="button" class="tab" data-tab="fields">Fields</button>
+            <button type="button" class="tab" data-tab="barcode">Barcode</button>
+            <button type="button" class="tab" data-tab="images">Images</button>
+            <button type="button" class="tab" data-tab="signing">Signing</button>
+          </div>
+
+          <section class="panel is-active" data-panel="details">
+            <div class="panel-heading">
+              <h2>Pass Details</h2>
+            </div>
+
+            <div class="form-grid">
+              <label>
+                <span>Pass Style</span>
+                <select id="passStyle">
+                  <option value="generic">Generic</option>
+                  <option value="coupon">Coupon</option>
+                  <option value="storeCard">Store Card</option>
+                  <option value="eventTicket">Event Ticket</option>
+                  <option value="boardingPass">Boarding Pass</option>
+                </select>
+              </label>
+
+              <label class="boarding-only is-hidden">
+                <span>Transit Type</span>
+                <select id="transitType">
+                  <option value="PKTransitTypeGeneric">Generic</option>
+                  <option value="PKTransitTypeAir">Air</option>
+                  <option value="PKTransitTypeBoat">Boat</option>
+                  <option value="PKTransitTypeBus">Bus</option>
+                  <option value="PKTransitTypeTrain">Train</option>
+                </select>
+              </label>
+
+              <label>
+                <span>Pass Type Identifier</span>
+                <input id="passTypeIdentifier" name="passTypeIdentifier" autocomplete="off" value="pass.com.example.walletpass">
+              </label>
+
+              <label>
+                <span>Team Identifier</span>
+                <input id="teamIdentifier" name="teamIdentifier" autocomplete="off" value="ABCDE12345">
+              </label>
+
+              <label>
+                <span>Organization Name</span>
+                <input id="organizationName" name="organizationName" value="Acme Coffee">
+              </label>
+
+              <label>
+                <span>Serial Number</span>
+                <input id="serialNumber" name="serialNumber" value="ACME-10001">
+              </label>
+
+              <label>
+                <span>Description</span>
+                <input id="description" name="description" value="Acme Coffee Rewards">
+              </label>
+
+              <label>
+                <span>Logo Text</span>
+                <input id="logoText" name="logoText" value="ACME">
+              </label>
+
+              <label>
+                <span>Relevant Date</span>
+                <input id="relevantDate" name="relevantDate" type="datetime-local">
+              </label>
+
+              <label>
+                <span>Expiration Date</span>
+                <input id="expirationDate" name="expirationDate" type="datetime-local">
+              </label>
+
+              <label>
+                <span>Store Identifiers</span>
+                <input id="associatedStoreIdentifiers" name="associatedStoreIdentifiers" inputmode="numeric" placeholder="123456789, 987654321">
+              </label>
+
+              <label>
+                <span>Location Latitude</span>
+                <input id="locationLatitude" name="locationLatitude" inputmode="decimal" placeholder="51.5074">
+              </label>
+
+              <label>
+                <span>Location Longitude</span>
+                <input id="locationLongitude" name="locationLongitude" inputmode="decimal" placeholder="-0.1278">
+              </label>
+
+              <label>
+                <span>Location Text</span>
+                <input id="locationText" name="locationText" placeholder="Nearby">
+              </label>
+            </div>
+
+            <div class="color-row">
+              <label>
+                <span>Background</span>
+                <input id="backgroundColor" type="color" value="#1d4ed8">
+              </label>
+              <label>
+                <span>Foreground</span>
+                <input id="foregroundColor" type="color" value="#ffffff">
+              </label>
+              <label>
+                <span>Labels</span>
+                <input id="labelColor" type="color" value="#dbeafe">
+              </label>
+            </div>
+
+            <div class="toggle-row">
+              <label class="check-control">
+                <input id="sharingProhibited" type="checkbox">
+                <span>Sharing Prohibited</span>
+              </label>
+              <label class="check-control">
+                <input id="voided" type="checkbox">
+                <span>Voided</span>
+              </label>
+            </div>
+          </section>
+
+          <section class="panel" data-panel="fields">
+            <div class="panel-heading">
+              <h2>Fields</h2>
+            </div>
+
+            <div class="field-block">
+              <div class="field-heading">
+                <h3>Primary</h3>
+                <button type="button" class="icon-button add-field" data-kind="primaryFields" aria-label="Add primary field" title="Add primary field">+</button>
+              </div>
+              <div class="field-list" id="primaryFields"></div>
+            </div>
+
+            <div class="field-block">
+              <div class="field-heading">
+                <h3>Secondary</h3>
+                <button type="button" class="icon-button add-field" data-kind="secondaryFields" aria-label="Add secondary field" title="Add secondary field">+</button>
+              </div>
+              <div class="field-list" id="secondaryFields"></div>
+            </div>
+
+            <div class="field-block">
+              <div class="field-heading">
+                <h3>Auxiliary</h3>
+                <button type="button" class="icon-button add-field" data-kind="auxiliaryFields" aria-label="Add auxiliary field" title="Add auxiliary field">+</button>
+              </div>
+              <div class="field-list" id="auxiliaryFields"></div>
+            </div>
+
+            <div class="field-block">
+              <div class="field-heading">
+                <h3>Back</h3>
+                <button type="button" class="icon-button add-field" data-kind="backFields" aria-label="Add back field" title="Add back field">+</button>
+              </div>
+              <div class="field-list" id="backFields"></div>
+            </div>
+          </section>
+
+          <section class="panel" data-panel="barcode">
+            <div class="panel-heading">
+              <h2>Barcode</h2>
+            </div>
+
+            <label class="check-control wide-check">
+              <input id="barcodeEnabled" type="checkbox" checked>
+              <span>Include Barcode</span>
+            </label>
+
+            <div class="form-grid">
+              <label>
+                <span>Format</span>
+                <select id="barcodeFormat">
+                  <option value="PKBarcodeFormatQR">QR</option>
+                  <option value="PKBarcodeFormatPDF417">PDF417</option>
+                  <option value="PKBarcodeFormatAztec">Aztec</option>
+                  <option value="PKBarcodeFormatCode128">Code 128</option>
+                </select>
+              </label>
+
+              <label>
+                <span>Message Encoding</span>
+                <input id="barcodeEncoding" value="iso-8859-1">
+              </label>
+
+              <label class="span-2">
+                <span>Message</span>
+                <input id="barcodeMessage" value="ACME-10001">
+              </label>
+
+              <label class="span-2">
+                <span>Alt Text</span>
+                <input id="barcodeAltText" value="ACME-10001">
+              </label>
+            </div>
+          </section>
+
+          <section class="panel" data-panel="images">
+            <div class="panel-heading">
+              <h2>Images</h2>
+            </div>
+
+            <div class="upload-grid">
+              <label class="file-control">
+                <span>Icon PNG</span>
+                <input type="file" id="iconFile" accept="image/png">
+                <strong data-file-name="icon">Default</strong>
+              </label>
+              <label class="file-control">
+                <span>Logo PNG</span>
+                <input type="file" id="logoFile" accept="image/png">
+                <strong data-file-name="logo">None</strong>
+              </label>
+              <label class="file-control">
+                <span>Strip PNG</span>
+                <input type="file" id="stripFile" accept="image/png">
+                <strong data-file-name="strip">None</strong>
+              </label>
+              <label class="file-control">
+                <span>Thumbnail PNG</span>
+                <input type="file" id="thumbnailFile" accept="image/png">
+                <strong data-file-name="thumbnail">None</strong>
+              </label>
+              <label class="file-control">
+                <span>Background PNG</span>
+                <input type="file" id="backgroundFile" accept="image/png">
+                <strong data-file-name="background">None</strong>
+              </label>
+              <label class="file-control">
+                <span>Footer PNG</span>
+                <input type="file" id="footerFile" accept="image/png">
+                <strong data-file-name="footer">None</strong>
+              </label>
+            </div>
+          </section>
+
+          <section class="panel" data-panel="signing">
+            <div class="panel-heading">
+              <h2>Signing</h2>
+            </div>
+
+            <div class="security-note">
+              <strong>Signing files are sensitive.</strong>
+              <span>This hosted backend receives certificate and private key material only to sign the pass request. Files are not saved by the app.</span>
+            </div>
+
+            <div class="segment" role="tablist" aria-label="Signing input mode">
+              <button type="button" class="segment-button is-active" data-signing-mode="p12">P12</button>
+              <button type="button" class="segment-button" data-signing-mode="pem">PEM</button>
+            </div>
+
+            <div class="signing-mode is-active" data-signing-panel="p12">
+              <div class="upload-grid">
+                <label class="file-control">
+                  <span>P12 Certificate</span>
+                  <input type="file" id="p12File" accept=".p12,.pfx,application/x-pkcs12">
+                  <strong data-file-name="p12">Required</strong>
+                </label>
+                <label class="file-control">
+                  <span>WWDR Certificate</span>
+                  <input type="file" id="wwdrFileP12" accept=".cer,.der,.pem,.crt,application/x-x509-ca-cert">
+                  <strong data-file-name="wwdrP12">Required</strong>
+                </label>
+              </div>
+
+              <label class="single-field">
+                <span>P12 Password</span>
+                <input id="p12Password" type="password" autocomplete="off">
+              </label>
+            </div>
+
+            <div class="signing-mode" data-signing-panel="pem">
+              <div class="upload-grid">
+                <label class="file-control">
+                  <span>Signing Certificate</span>
+                  <input type="file" id="certificateFile" accept=".cer,.der,.pem,.crt,application/x-x509-ca-cert">
+                  <strong data-file-name="certificate">File or Paste</strong>
+                </label>
+                <label class="file-control">
+                  <span>Private Key</span>
+                  <input type="file" id="privateKeyFile" accept=".pem,.key">
+                  <strong data-file-name="privateKey">File or Paste</strong>
+                </label>
+                <label class="file-control">
+                  <span>WWDR Certificate</span>
+                  <input type="file" id="wwdrFilePem" accept=".cer,.der,.pem,.crt,application/x-x509-ca-cert">
+                  <strong data-file-name="wwdrPem">File or Paste</strong>
+                </label>
+              </div>
+
+              <label class="single-field">
+                <span>Private Key Password</span>
+                <input id="privateKeyPassphrase" type="password" autocomplete="off">
+              </label>
+
+              <label class="textarea-field">
+                <span>Signing Certificate PEM</span>
+                <textarea id="certificateText" spellcheck="false"></textarea>
+              </label>
+              <label class="textarea-field">
+                <span>Private Key PEM</span>
+                <textarea id="privateKeyText" spellcheck="false"></textarea>
+              </label>
+              <label class="textarea-field">
+                <span>WWDR Certificate PEM</span>
+                <textarea id="wwdrText" spellcheck="false"></textarea>
+              </label>
+            </div>
+          </section>
+        </form>
+
+        <aside class="preview-panel" aria-label="Pass preview">
+          <div class="preview-tabs">
+            <button type="button" class="preview-tab is-active" data-preview="pass">Preview</button>
+            <button type="button" class="preview-tab" data-preview="json">JSON</button>
+          </div>
+
+          <div class="preview-view is-active" data-preview-panel="pass">
+            <div class="phone-frame">
+              <section class="wallet-pass" id="passPreview">
+                <div class="pass-top">
+                  <span id="previewLogoText">ACME</span>
+                  <span id="previewStyle">Generic</span>
+                </div>
+                <div class="preview-primary" id="previewPrimary"></div>
+                <div class="preview-secondary" id="previewSecondary"></div>
+                <div class="barcode-preview" id="barcodePreview">
+                  <div class="barcode-grid" aria-hidden="true"></div>
+                  <span id="previewBarcodeText">ACME-10001</span>
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <div class="preview-view" data-preview-panel="json">
+            <pre class="json-preview" id="jsonPreview"></pre>
+          </div>
+        </aside>
+      </div>
+
+      <footer class="site-footer">
+        <span>Created by Teddy Ng. Powered by Codex. Hosted by Render.</span>
+        <span class="status-pill" id="statusText" role="status">Checking setup...</span>
+      </footer>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

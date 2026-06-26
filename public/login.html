@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign In | Wallet Pass Studio</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/theme.js" defer></script>
+  </head>
+  <body class="login-body">
+    <main class="login-shell">
+      <section class="login-panel" aria-labelledby="loginTitle">
+        <div class="login-heading">
+          <span class="eyebrow">Apple Wallet</span>
+          <h1 id="loginTitle">Wallet Pass Studio</h1>
+        </div>
+
+        <div class="auth-tabs" role="tablist" aria-label="Account actions">
+          <button class="auth-tab is-active" type="button" data-auth-tab="signin">Sign in</button>
+          <button class="auth-tab" type="button" data-auth-tab="register">Request account</button>
+          <button class="auth-tab" type="button" data-auth-tab="reset">Reset password</button>
+        </div>
+
+        <p class="login-message" id="loginMessage" role="alert" hidden></p>
+
+        <form class="login-form auth-panel is-active" method="post" action="/api/login" data-auth-panel="signin">
+          <label>
+            <span>Username</span>
+            <input name="username" autocomplete="username" value="admin" required>
+          </label>
+
+          <label>
+            <span>Password</span>
+            <input name="password" type="password" autocomplete="current-password" required autofocus>
+          </label>
+
+          <button class="primary-button" type="submit">Sign in</button>
+        </form>
+
+        <form class="login-form auth-panel" method="post" action="/api/register" data-auth-panel="register">
+          <label>
+            <span>Username</span>
+            <input name="username" autocomplete="username" required>
+          </label>
+
+          <label>
+            <span>Password</span>
+            <input name="password" type="password" autocomplete="new-password" required>
+          </label>
+
+          <label>
+            <span>Confirm Password</span>
+            <input name="confirmPassword" type="password" autocomplete="new-password" required>
+          </label>
+
+          <button class="primary-button" type="submit">Submit request</button>
+        </form>
+
+        <form class="login-form auth-panel" method="post" action="/api/password-reset" data-auth-panel="reset">
+          <label>
+            <span>Username</span>
+            <input name="username" autocomplete="username" required>
+          </label>
+
+          <label>
+            <span>New Password</span>
+            <input name="password" type="password" autocomplete="new-password" required>
+          </label>
+
+          <label>
+            <span>Confirm Password</span>
+            <input name="confirmPassword" type="password" autocomplete="new-password" required>
+          </label>
+
+          <button class="primary-button" type="submit">Submit reset</button>
+        </form>
+
+        <button class="secondary-button theme-auth-button" type="button" data-theme-toggle>Dark mode</button>
+      </section>
+
+      <footer class="site-footer login-footer">
+        <span>Created by Teddy Ng. Powered by Codex. Hosted by Render.</span>
+      </footer>
+    </main>
+
+    <script src="/login.js"></script>
+  </body>
+</html>

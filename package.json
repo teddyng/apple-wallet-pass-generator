@@ -1,0 +1,12 @@
+{
+  "name": "apple-wallet-pass-generator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local app for generating signed Apple Wallet .pkpass files.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

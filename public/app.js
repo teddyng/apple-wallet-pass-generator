@@ -1,0 +1,514 @@
+const state = {
+  activeTab: "details",
+  signingMode: "p12",
+  previewMode: "pass",
+  files: {},
+  statusLockedUntil: 0,
+  primaryFields: [
+    { key: "reward", label: "Reward", value: "Free Coffee" }
+  ],
+  secondaryFields: [
+    { key: "member", label: "Member", value: "Taylor Smith" },
+    { key: "points", label: "Points", value: "1280" }
+  ],
+  auxiliaryFields: [
+    { key: "tier", label: "Tier", value: "Gold" }
+  ],
+  backFields: [
+    { key: "terms", label: "Terms", value: "Valid at participating locations." }
+  ]
+};
+
+const fieldKinds = ["primaryFields", "secondaryFields", "auxiliaryFields", "backFields"];
+const IMAGE_FILE_LIMIT = 8 * 1024 * 1024;
+const SIGNING_FILE_LIMIT = 5 * 1024 * 1024;
+const signingFileKeys = new Set(["p12", "wwdrP12", "certificate", "privateKey", "wwdrPem"]);
+
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+
+function read(id) {
+  return $(`#${id}`).value.trim();
+}
+
+function checked(id) {
+  return $(`#${id}`).checked;
+}
+
+function setStatus(message, tone = "") {
+  const status = $("#statusText");
+  status.textContent = message;
+  status.classList.toggle("is-error", tone === "error");
+  status.classList.toggle("is-success", tone === "success");
+}
+
+function lockStatus(message, tone = "", durationMs = 0) {
+  state.statusLockedUntil = durationMs ? Date.now() + durationMs : 0;
+  setStatus(message, tone);
+}
+
+function hasText(id) {
+  const input = $(`#${id}`);
+  return Boolean(input && input.value.trim());
+}
+
+function hasFile(key) {
+  return Boolean(state.files[key]);
+}
+
+function hasPemText(id) {
+  return Boolean($(`#${id}`) && $(`#${id}`).value.trim());
+}
+
+function statusFromState() {
+  if (!hasText("passTypeIdentifier")) return "Add Pass Type Identifier";
+  if (!hasText("teamIdentifier")) return "Add Team Identifier";
+  if (!hasText("organizationName")) return "Add Organization Name";
+  if (checked("barcodeEnabled") && !hasText("barcodeMessage")) return "Add barcode message";
+
+  if (state.signingMode === "p12") {
+    if (!hasFile("p12")) return "Add P12 certificate";
+    if (!hasFile("wwdrP12")) return "Add WWDR certificate";
+  } else {
+    if (!hasFile("certificate") && !hasPemText("certificateText")) return "Add signing certificate";
+    if (!hasFile("privateKey") && !hasPemText("privateKeyText")) return "Add private key";
+    if (!hasFile("wwdrPem") && !hasPemText("wwdrText")) return "Add WWDR certificate";
+  }
+
+  return "Ready to generate";
+}
+
+function syncStatus() {
+  if (Date.now() < state.statusLockedUntil) return;
+  const message = statusFromState();
+  setStatus(message, message === "Ready to generate" ? "success" : "");
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function styleName(value) {
+  return {
+    generic: "Generic",
+    coupon: "Coupon",
+    storeCard: "Store Card",
+    eventTicket: "Event Ticket",
+    boardingPass: "Boarding"
+  }[value] || "Generic";
+}
+
+function fieldMarkup(field, isPrimary = false) {
+  const label = field.label || field.key || "Field";
+  const value = field.value || "";
+  return `
+    <div class="preview-field ${isPrimary ? "is-primary" : ""}">
+      <span class="preview-label">${escapeHtml(label)}</span>
+      <span class="preview-value">${escapeHtml(value)}</span>
+    </div>
+  `;
+}
+
+function renderFieldRows(kind) {
+  const container = $(`#${kind}`);
+  container.innerHTML = state[kind].map((field, index) => `
+    <div class="field-row" data-kind="${kind}" data-index="${index}">
+      <label>
+        <span>Key</span>
+        <input data-field="key" value="${escapeHtml(field.key || "")}" autocomplete="off">
+      </label>
+      <label>
+        <span>Label</span>
+        <input data-field="label" value="${escapeHtml(field.label || "")}">
+      </label>
+      <label>
+        <span>Value</span>
+        <input data-field="value" value="${escapeHtml(field.value || "")}">
+      </label>
+      <button type="button" class="icon-button remove" data-remove="${kind}" data-index="${index}" aria-label="Remove field" title="Remove field">×</button>
+    </div>
+  `).join("");
+}
+
+function renderAllFieldRows() {
+  fieldKinds.forEach(renderFieldRows);
+}
+
+function passJsonPreview() {
+  const style = read("passStyle");
+  const pass = {
+    formatVersion: 1,
+    passTypeIdentifier: read("passTypeIdentifier"),
+    serialNumber: read("serialNumber"),
+    teamIdentifier: read("teamIdentifier"),
+    organizationName: read("organizationName"),
+    description: read("description"),
+    logoText: read("logoText"),
+    foregroundColor: colorAsRgb(read("foregroundColor")),
+    labelColor: colorAsRgb(read("labelColor")),
+    backgroundColor: colorAsRgb(read("backgroundColor"))
+  };
+
+  const relevantDate = read("relevantDate");
+  if (relevantDate) pass.relevantDate = new Date(relevantDate).toISOString();
+
+  const expirationDate = read("expirationDate");
+  if (expirationDate) pass.expirationDate = new Date(expirationDate).toISOString();
+
+  if (checked("sharingProhibited")) pass.sharingProhibited = true;
+  if (checked("voided")) pass.voided = true;
+
+  const stylePayload = {
+    primaryFields: state.primaryFields.filter((field) => field.value),
+    secondaryFields: state.secondaryFields.filter((field) => field.value),
+    auxiliaryFields: state.auxiliaryFields.filter((field) => field.value),
+    backFields: state.backFields.filter((field) => field.value)
+  };
+  if (style === "boardingPass") stylePayload.transitType = read("transitType");
+  pass[style] = stylePayload;
+
+  if (checked("barcodeEnabled") && read("barcodeMessage")) {
+    const barcode = {
+      format: read("barcodeFormat"),
+      message: read("barcodeMessage"),
+      messageEncoding: read("barcodeEncoding") || "iso-8859-1"
+    };
+    if (read("barcodeAltText")) barcode.altText = read("barcodeAltText");
+    pass.barcode = barcode;
+    pass.barcodes = [barcode];
+  }
+
+  const storeIds = read("associatedStoreIdentifiers")
+    .split(",")
+    .map((item) => Number(item.trim()))
+    .filter((item) => Number.isInteger(item) && item > 0);
+  if (storeIds.length) pass.associatedStoreIdentifiers = storeIds;
+
+  const latitude = Number(read("locationLatitude"));
+  const longitude = Number(read("locationLongitude"));
+  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+    pass.locations = [{ latitude, longitude }];
+    if (read("locationText")) pass.locations[0].relevantText = read("locationText");
+  }
+
+  return pass;
+}
+
+function colorAsRgb(hex) {
+  const clean = String(hex || "#000000").replace("#", "");
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+function updatePreview() {
+  const passPreview = $("#passPreview");
+  const foregroundColor = read("foregroundColor");
+  const labelColor = read("labelColor");
+
+  passPreview.style.backgroundColor = read("backgroundColor");
+  passPreview.style.color = foregroundColor;
+  passPreview.querySelectorAll(".preview-value").forEach((node) => {
+    node.style.color = foregroundColor;
+  });
+  passPreview.querySelectorAll(".preview-label").forEach((node) => {
+    node.style.color = labelColor;
+  });
+
+  $("#previewLogoText").textContent = read("logoText") || read("organizationName") || "PASS";
+  $("#previewStyle").textContent = styleName(read("passStyle"));
+
+  const primary = state.primaryFields.filter((field) => field.value);
+  const secondary = [...state.secondaryFields, ...state.auxiliaryFields].filter((field) => field.value);
+
+  $("#previewPrimary").innerHTML = (primary.length ? primary : [{ label: "Primary", value: "Value" }])
+    .slice(0, 2)
+    .map((field) => fieldMarkup(field, true))
+    .join("");
+
+  $("#previewSecondary").innerHTML = secondary
+    .slice(0, 4)
+    .map((field) => fieldMarkup(field))
+    .join("");
+
+  const barcodeEnabled = checked("barcodeEnabled") && read("barcodeMessage");
+  $("#barcodePreview").classList.toggle("is-hidden", !barcodeEnabled);
+  $("#previewBarcodeText").textContent = read("barcodeAltText") || read("barcodeMessage");
+  $("#jsonPreview").textContent = JSON.stringify(passJsonPreview(), null, 2);
+  syncStatus();
+}
+
+function activateTab(tabName) {
+  state.activeTab = tabName;
+  $$(".tab").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.tab === tabName));
+  $$(".panel").forEach((panel) => panel.classList.toggle("is-active", panel.dataset.panel === tabName));
+}
+
+function activateSigningMode(mode) {
+  state.signingMode = mode;
+  $$(".segment-button").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.signingMode === mode);
+  });
+  $$(".signing-mode").forEach((panel) => {
+    panel.classList.toggle("is-active", panel.dataset.signingPanel === mode);
+  });
+}
+
+function activatePreview(mode) {
+  state.previewMode = mode;
+  $$(".preview-tab").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.preview === mode);
+  });
+  $$(".preview-view").forEach((panel) => {
+    panel.classList.toggle("is-active", panel.dataset.previewPanel === mode);
+  });
+}
+
+function fileToPayload(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+    reader.onload = () => {
+      const bytes = new Uint8Array(reader.result);
+      let binary = "";
+      const chunkSize = 0x8000;
+      for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+      }
+      resolve({
+        name: file.name,
+        type: file.type || "application/octet-stream",
+        data: btoa(binary)
+      });
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+async function bindFileInput(inputId, fileKey, displayKey) {
+  const input = $(`#${inputId}`);
+  const label = $(`[data-file-name="${displayKey || fileKey}"]`);
+  input.addEventListener("change", async () => {
+    const file = input.files && input.files[0];
+    if (!file) {
+      state.files[fileKey] = null;
+      if (label) label.textContent = "None";
+      return;
+    }
+
+    try {
+      const limit = signingFileKeys.has(fileKey) ? SIGNING_FILE_LIMIT : IMAGE_FILE_LIMIT;
+      if (file.size > limit) {
+        throw new Error(`${file.name} is too large. Max size is ${Math.round(limit / 1024 / 1024)} MB.`);
+      }
+      state.files[fileKey] = await fileToPayload(file);
+      if (label) label.textContent = file.name;
+      syncStatus();
+    } catch (error) {
+      state.files[fileKey] = null;
+      if (label) label.textContent = "Unreadable";
+      lockStatus(error.message, "error", 8000);
+    }
+  });
+}
+
+function textPayload(value) {
+  const text = String(value || "").trim();
+  return text ? { text } : null;
+}
+
+function collectPayload() {
+  const location = {
+    latitude: read("locationLatitude"),
+    longitude: read("locationLongitude"),
+    relevantText: read("locationText")
+  };
+
+  const payload = {
+    pass: {
+      passStyle: read("passStyle"),
+      transitType: read("transitType"),
+      passTypeIdentifier: read("passTypeIdentifier"),
+      teamIdentifier: read("teamIdentifier"),
+      organizationName: read("organizationName"),
+      serialNumber: read("serialNumber"),
+      description: read("description"),
+      logoText: read("logoText"),
+      relevantDate: read("relevantDate"),
+      expirationDate: read("expirationDate"),
+      associatedStoreIdentifiers: read("associatedStoreIdentifiers"),
+      sharingProhibited: checked("sharingProhibited"),
+      voided: checked("voided")
+    },
+    colors: {
+      backgroundColor: read("backgroundColor"),
+      foregroundColor: read("foregroundColor"),
+      labelColor: read("labelColor")
+    },
+    primaryFields: state.primaryFields,
+    secondaryFields: state.secondaryFields,
+    auxiliaryFields: state.auxiliaryFields,
+    backFields: state.backFields,
+    barcode: {
+      enabled: checked("barcodeEnabled"),
+      format: read("barcodeFormat"),
+      message: read("barcodeMessage"),
+      encoding: read("barcodeEncoding"),
+      altText: read("barcodeAltText")
+    },
+    locations: location.latitude && location.longitude ? [location] : [],
+    images: {
+      icon: state.files.icon || null,
+      logo: state.files.logo || null,
+      strip: state.files.strip || null,
+      thumbnail: state.files.thumbnail || null,
+      background: state.files.background || null,
+      footer: state.files.footer || null
+    },
+    signing: {
+      mode: state.signingMode
+    }
+  };
+
+  if (state.signingMode === "p12") {
+    payload.signing.p12 = state.files.p12 || null;
+    payload.signing.p12Password = read("p12Password");
+    payload.signing.wwdrCertificate = state.files.wwdrP12 || null;
+  } else {
+    payload.signing.certificate = state.files.certificate || textPayload(read("certificateText"));
+    payload.signing.privateKey = state.files.privateKey || textPayload(read("privateKeyText"));
+    payload.signing.wwdrCertificate = state.files.wwdrPem || textPayload(read("wwdrText"));
+    payload.signing.privateKeyPassphrase = read("privateKeyPassphrase");
+  }
+
+  return payload;
+}
+
+async function generatePass() {
+  const button = $("#generateButton");
+  button.disabled = true;
+  lockStatus("Generating...", "", 120000);
+
+  try {
+    const response = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(collectPayload())
+    });
+
+    if (!response.ok) {
+      let message = "Could not generate pass.";
+      try {
+        const payload = await response.json();
+        if (payload.error) message = payload.error;
+      } catch {
+        message = await response.text();
+      }
+      throw new Error(message);
+    }
+
+    const blob = await response.blob();
+    const disposition = response.headers.get("content-disposition") || "";
+    const match = disposition.match(/filename="([^"]+)"/);
+    const filename = match ? match[1] : `${read("serialNumber") || "wallet-pass"}.pkpass`;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+    lockStatus(`Downloaded ${filename}`, "success", 6000);
+    window.setTimeout(syncStatus, 6500);
+  } catch (error) {
+    lockStatus(error.message || "Could not generate pass.", "error", 8000);
+    window.setTimeout(syncStatus, 8500);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function loadCurrentUser() {
+  try {
+    const response = await fetch("/api/me");
+    if (!response.ok) return;
+    const user = await response.json();
+    const adminLink = $("#adminLink");
+    if (adminLink) {
+      adminLink.classList.toggle("is-hidden", user.role !== "admin");
+    }
+  } catch {
+    // The protected page still works if this small enhancement fails.
+  }
+}
+
+function bindEvents() {
+  $$(".tab").forEach((tab) => {
+    tab.addEventListener("click", () => activateTab(tab.dataset.tab));
+  });
+
+  $$(".segment-button").forEach((button) => {
+    button.addEventListener("click", () => activateSigningMode(button.dataset.signingMode));
+  });
+
+  $$(".preview-tab").forEach((button) => {
+    button.addEventListener("click", () => activatePreview(button.dataset.preview));
+  });
+
+  $("#generateButton").addEventListener("click", generatePass);
+
+  $("#passForm").addEventListener("input", (event) => {
+    const row = event.target.closest(".field-row");
+    if (row && event.target.dataset.field) {
+      const { kind, index } = row.dataset;
+      state[kind][Number(index)][event.target.dataset.field] = event.target.value;
+    }
+
+    const isBoarding = read("passStyle") === "boardingPass";
+    $$(".boarding-only").forEach((node) => node.classList.toggle("is-hidden", !isBoarding));
+    updatePreview();
+  });
+
+  $("#passForm").addEventListener("change", updatePreview);
+
+  $$(".add-field").forEach((button) => {
+    button.addEventListener("click", () => {
+      const kind = button.dataset.kind;
+      state[kind].push({ key: "", label: "", value: "" });
+      renderFieldRows(kind);
+      updatePreview();
+    });
+  });
+
+  $("#passForm").addEventListener("click", (event) => {
+    const removeButton = event.target.closest("[data-remove]");
+    if (!removeButton) return;
+    const kind = removeButton.dataset.remove;
+    state[kind].splice(Number(removeButton.dataset.index), 1);
+    renderFieldRows(kind);
+    updatePreview();
+  });
+
+  bindFileInput("iconFile", "icon");
+  bindFileInput("logoFile", "logo");
+  bindFileInput("stripFile", "strip");
+  bindFileInput("thumbnailFile", "thumbnail");
+  bindFileInput("backgroundFile", "background");
+  bindFileInput("footerFile", "footer");
+  bindFileInput("p12File", "p12");
+  bindFileInput("wwdrFileP12", "wwdrP12");
+  bindFileInput("certificateFile", "certificate");
+  bindFileInput("privateKeyFile", "privateKey");
+  bindFileInput("wwdrFilePem", "wwdrPem");
+}
+
+renderAllFieldRows();
+bindEvents();
+loadCurrentUser();
+updatePreview();
