@@ -3,6 +3,8 @@ const state = {
   signingMode: "p12",
   previewMode: "pass",
   files: {},
+  canUseStoredSigning: false,
+  storedSigningConfigured: false,
   statusLockedUntil: 0,
   primaryFields: [
     { key: "reward", label: "Reward", value: "Free Coffee" }
@@ -23,8 +25,19 @@ const fieldKinds = ["primaryFields", "secondaryFields", "auxiliaryFields", "back
 const IMAGE_FILE_LIMIT = 8 * 1024 * 1024;
 const SIGNING_FILE_LIMIT = 5 * 1024 * 1024;
 const MAX_BULK_ROWS = 50;
+const EDITOR_SAVE_KEY = "wallet-pass-studio-editor-state-v1";
 const imagePreviewKeys = new Set(["icon", "logo", "strip", "thumbnail", "background", "footer"]);
 const signingFileKeys = new Set(["p12", "wwdrP12", "certificate", "privateKey", "wwdrPem"]);
+const savedInputIds = [
+  "passStyle", "transitType", "passTypeIdentifier", "teamIdentifier", "organizationName",
+  "serialNumber", "description", "logoText", "relevantDate", "expirationDate",
+  "associatedStoreIdentifiers", "locationLatitude", "locationLongitude", "locationText",
+  "backgroundColor", "foregroundColor", "labelColor", "barcodeFormat", "barcodeEncoding",
+  "barcodeMessage", "barcodeAltText", "bulkRows"
+];
+const savedCheckboxIds = ["sharingProhibited", "voided", "barcodeEnabled"];
+let saveTimer = null;
+let isRestoringEditorState = false;
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -78,7 +91,10 @@ function statusFromState() {
   if (!hasText("organizationName")) return "Add Organization Name";
   if (checked("barcodeEnabled") && !hasText("barcodeMessage")) return "Add barcode message";
 
-  if (state.signingMode === "p12") {
+  if (state.signingMode === "stored") {
+    if (!state.storedSigningConfigured) return "Stored signing not configured";
+    if (!state.canUseStoredSigning) return "Stored signing not allowed";
+  } else if (state.signingMode === "p12") {
     if (!hasFile("p12")) return "Add P12 certificate";
     if (!hasFile("wwdrP12")) return "Add WWDR certificate";
   } else {
@@ -310,6 +326,107 @@ function applyPassJson(pass) {
   renderAllFieldRows();
   $$(".boarding-only").forEach((node) => node.classList.toggle("is-hidden", style !== "boardingPass"));
   updatePreview();
+  scheduleEditorSave();
+}
+
+function collectEditorState() {
+  const inputs = {};
+  const checkboxes = {};
+
+  for (const id of savedInputIds) {
+    const input = $(`#${id}`);
+    if (input) inputs[id] = input.value;
+  }
+
+  for (const id of savedCheckboxIds) {
+    const input = $(`#${id}`);
+    if (input) checkboxes[id] = input.checked;
+  }
+
+  return {
+    savedAt: new Date().toISOString(),
+    signingMode: state.signingMode,
+    inputs,
+    checkboxes,
+    primaryFields: state.primaryFields,
+    secondaryFields: state.secondaryFields,
+    auxiliaryFields: state.auxiliaryFields,
+    backFields: state.backFields
+  };
+}
+
+function saveEditorState() {
+  if (isRestoringEditorState) return;
+  try {
+    localStorage.setItem(EDITOR_SAVE_KEY, JSON.stringify(collectEditorState()));
+  } catch {
+    // Browser storage can be unavailable or full; the editor still works without auto-save.
+  }
+}
+
+function scheduleEditorSave() {
+  if (isRestoringEditorState) return;
+  window.clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(saveEditorState, 250);
+}
+
+function restoreFieldList(value, fallback) {
+  return Array.isArray(value)
+    ? value.map((field) => {
+      const output = {
+        key: field && field.key ? String(field.key) : "",
+        label: field && field.label ? String(field.label) : "",
+        value: field && field.value !== undefined && field.value !== null ? String(field.value) : ""
+      };
+      if (field && field.textAlignment) output.textAlignment = String(field.textAlignment);
+      if (field && field.changeMessage) output.changeMessage = String(field.changeMessage);
+      return output;
+    })
+    : fallback;
+}
+
+function restoreEditorState() {
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(EDITOR_SAVE_KEY) || "null");
+  } catch {
+    return;
+  }
+  if (!saved || typeof saved !== "object") return;
+
+  isRestoringEditorState = true;
+  try {
+    const inputs = saved.inputs && typeof saved.inputs === "object" ? saved.inputs : {};
+    const checkboxes = saved.checkboxes && typeof saved.checkboxes === "object" ? saved.checkboxes : {};
+
+    for (const id of savedInputIds) {
+      if (Object.prototype.hasOwnProperty.call(inputs, id)) write(id, inputs[id]);
+    }
+    for (const id of savedCheckboxIds) {
+      if (Object.prototype.hasOwnProperty.call(checkboxes, id)) setChecked(id, checkboxes[id]);
+    }
+
+    state.primaryFields = restoreFieldList(saved.primaryFields, state.primaryFields);
+    state.secondaryFields = restoreFieldList(saved.secondaryFields, state.secondaryFields);
+    state.auxiliaryFields = restoreFieldList(saved.auxiliaryFields, state.auxiliaryFields);
+    state.backFields = restoreFieldList(saved.backFields, state.backFields);
+    renderAllFieldRows();
+
+    const savedMode = ["p12", "pem", "stored"].includes(saved.signingMode) ? saved.signingMode : "p12";
+    if (savedMode !== "stored" || canActivateStoredSigning()) activateSigningMode(savedMode);
+  } finally {
+    isRestoringEditorState = false;
+  }
+}
+
+function clearEditorState() {
+  if (!window.confirm("Clear the saved editor draft and reload the starter pass?")) return;
+  try {
+    localStorage.removeItem(EDITOR_SAVE_KEY);
+  } catch {
+    // Nothing else is needed if storage removal fails.
+  }
+  window.location.reload();
 }
 
 function hashString(value) {
@@ -523,7 +640,40 @@ function activateTab(tabName) {
   $$(".panel").forEach((panel) => panel.classList.toggle("is-active", panel.dataset.panel === tabName));
 }
 
+function canActivateStoredSigning() {
+  return state.canUseStoredSigning && state.storedSigningConfigured;
+}
+
+function syncStoredSigningUi() {
+  const button = $('[data-signing-mode="stored"]');
+  const notice = $("#storedSigningNotice");
+  const available = canActivateStoredSigning();
+
+  if (button) {
+    button.disabled = !available;
+    button.title = available ? "Use the server-stored P12 and WWDR certificate" : "Ask an admin to enable stored signing after the server certificate is configured";
+  }
+
+  if (notice) {
+    if (!state.storedSigningConfigured) {
+      notice.textContent = "Server-stored P12 and WWDR certificates are not configured.";
+    } else if (!state.canUseStoredSigning) {
+      notice.textContent = "Your account is not in the stored signing group.";
+    } else {
+      notice.textContent = "This pass will be signed with the server-stored P12 and WWDR certificate.";
+    }
+  }
+
+  if (state.signingMode === "stored" && !available) activateSigningMode("p12");
+}
+
 function activateSigningMode(mode) {
+  if (mode === "stored" && !canActivateStoredSigning()) {
+    lockStatus(state.storedSigningConfigured ? "Stored signing is not enabled for this account." : "Stored signing is not configured.", "error", 6000);
+    window.setTimeout(syncStatus, 6500);
+    return;
+  }
+
   state.signingMode = mode;
   $$(".segment-button").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.signingMode === mode);
@@ -531,6 +681,7 @@ function activateSigningMode(mode) {
   $$(".signing-mode").forEach((panel) => {
     panel.classList.toggle("is-active", panel.dataset.signingPanel === mode);
   });
+  scheduleEditorSave();
 }
 
 function activatePreview(mode) {
@@ -667,7 +818,9 @@ function collectPayload() {
     }
   };
 
-  if (state.signingMode === "p12") {
+  if (state.signingMode === "stored") {
+    payload.signing.stored = true;
+  } else if (state.signingMode === "p12") {
     payload.signing.p12 = state.files.p12 || null;
     payload.signing.p12Password = read("p12Password");
     payload.signing.wwdrCertificate = state.files.wwdrP12 || null;
@@ -909,6 +1062,10 @@ async function loadCurrentUser() {
     if (adminLink) {
       adminLink.classList.toggle("is-hidden", user.role !== "admin");
     }
+    state.canUseStoredSigning = Boolean(user.canUseStoredSigning);
+    state.storedSigningConfigured = Boolean(user.storedSigningConfigured);
+    syncStoredSigningUi();
+    syncStatus();
   } catch {
     // The protected page still works if this small enhancement fails.
   }
@@ -920,7 +1077,10 @@ function bindEvents() {
   });
 
   $$(".segment-button").forEach((button) => {
-    button.addEventListener("click", () => activateSigningMode(button.dataset.signingMode));
+    button.addEventListener("click", () => {
+      activateSigningMode(button.dataset.signingMode);
+      syncStatus();
+    });
   });
 
   $$(".preview-tab").forEach((button) => {
@@ -931,6 +1091,7 @@ function bindEvents() {
   $("#bulkGenerateButton").addEventListener("click", generateBulkPasses);
   $("#copyJsonButton").addEventListener("click", copyJsonPreview);
   $("#applyJsonButton").addEventListener("click", applyJsonImport);
+  $("#clearEditorButton").addEventListener("click", clearEditorState);
 
   $("#passForm").addEventListener("input", (event) => {
     const row = event.target.closest(".field-row");
@@ -944,9 +1105,13 @@ function bindEvents() {
     const isBoarding = read("passStyle") === "boardingPass";
     $$(".boarding-only").forEach((node) => node.classList.toggle("is-hidden", !isBoarding));
     updatePreview();
+    scheduleEditorSave();
   });
 
-  $("#passForm").addEventListener("change", updatePreview);
+  $("#passForm").addEventListener("change", () => {
+    updatePreview();
+    scheduleEditorSave();
+  });
 
   $$(".add-field").forEach((button) => {
     button.addEventListener("click", () => {
@@ -954,6 +1119,7 @@ function bindEvents() {
       state[kind].push({ key: "", label: "", value: "" });
       renderFieldRows(kind);
       updatePreview();
+      scheduleEditorSave();
     });
   });
 
@@ -964,6 +1130,7 @@ function bindEvents() {
     state[kind].splice(Number(removeButton.dataset.index), 1);
     renderFieldRows(kind);
     updatePreview();
+    scheduleEditorSave();
   });
 
   bindFileInput("iconFile", "icon");
@@ -979,8 +1146,17 @@ function bindEvents() {
   bindFileInput("wwdrFilePem", "wwdrPem");
 }
 
-renderAllFieldRows();
-bindEvents();
-loadCurrentUser();
-updateBulkCount();
-updatePreview();
+async function initializeApp() {
+  renderAllFieldRows();
+  bindEvents();
+  syncStoredSigningUi();
+  updateBulkCount();
+  updatePreview();
+  await loadCurrentUser();
+  restoreEditorState();
+  syncStoredSigningUi();
+  updateBulkCount();
+  updatePreview();
+}
+
+initializeApp();

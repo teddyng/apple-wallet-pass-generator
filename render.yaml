@@ -17,3 +17,9 @@ services:
         generateValue: true
       - key: DATABASE_URL
         sync: false
+      - key: STORED_P12_BASE64
+        sync: false
+      - key: STORED_P12_PASSWORD
+        sync: false
+      - key: STORED_WWDR_BASE64
+        sync: false

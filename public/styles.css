@@ -234,6 +234,11 @@ h1 {
   color: var(--accent-strong);
 }
 
+.segment-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .panel {
   display: none;
   min-height: 0;
@@ -856,7 +861,7 @@ input[type="color"] {
 
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(7, minmax(110px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
   gap: 12px;
   margin-bottom: 18px;
 }

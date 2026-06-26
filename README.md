@@ -40,6 +40,7 @@ The app includes:
 - Password reset requests that require admin approval.
 - Login/account/password-reset rate limiting.
 - Upload size/type checks for images and signing files.
+- Admin-controlled stored P12/WWDR signing group.
 - Image previews for uploaded pass artwork.
 - Copy and paste supported pass JSON from the editor.
 - Admin audit logging to `data/audit.log`.
@@ -53,6 +54,27 @@ Admin tools are available at `/admin` after signing in as an admin.
 Account data is stored in Postgres when `DATABASE_URL` is set. Without `DATABASE_URL`, it falls back to `data/users.json`. On free hosted containers, local files may be reset when the service is rebuilt or redeployed.
 
 Audit logs are stored in Postgres when `DATABASE_URL` is set, or `data/audit.log` locally. Logs contain account/admin action metadata only; they do not contain passwords or signing file contents.
+
+## Stored signing group
+
+Admins always have stored signing access. To let a normal user generate passes without uploading signing files, add them to the stored signing group from `/admin`.
+
+Configure the stored certificate material outside GitHub:
+
+```text
+STORED_P12_BASE64=...
+STORED_P12_PASSWORD=...
+STORED_WWDR_BASE64=...
+```
+
+For local development, file paths also work:
+
+```text
+STORED_P12_PATH=/secure/path/certificate.p12
+STORED_WWDR_PATH=/secure/path/wwdr.pem
+```
+
+Do not commit real certificate files or private keys.
 
 ## Free persistent storage with Neon
 

@@ -69,6 +69,12 @@ async function deleteUser(username) {
   await loadAdminState();
 }
 
+async function setStoredSigningAccess(username, enabled) {
+  await apiAction("/api/admin/users/stored-signing", { username, enabled });
+  setAdminStatus(`${username} ${enabled ? "added to" : "removed from"} stored signing.`, "success");
+  await loadAdminState();
+}
+
 async function approveReset(id, username) {
   await apiAction("/api/admin/password-resets/approve", { id });
   setAdminStatus(`${username}'s password was reset.`, "success");
@@ -99,6 +105,7 @@ function renderMetrics() {
   adminMetrics.innerHTML = [
     metricMarkup("Total Users", metrics.totalUsers ?? 0),
     metricMarkup("Active Users", metrics.activeUsers ?? 0),
+    metricMarkup("Stored Signing", metrics.storedSigningUsers ?? 0),
     metricMarkup("Pending Accounts", metrics.pendingUsers ?? 0),
     metricMarkup("Pending Resets", metrics.pendingResets ?? 0),
     metricMarkup("Logins 24h", metrics.successfulLogins24h ?? 0),
@@ -154,10 +161,11 @@ function renderUsers() {
     <article class="admin-item compact">
       <div>
         <strong>${escapeHtml(user.username)}</strong>
-        <span>${escapeHtml(user.role)} · ${escapeHtml(user.status)}</span>
+        <span>${escapeHtml(user.role)} · ${escapeHtml(user.status)} · Stored signing: ${user.role === "admin" || user.storedSigningAccess ? "yes" : "no"}</span>
       </div>
       <div class="admin-actions">
         <span>${escapeHtml(formatDate(user.approvedAt || user.createdAt))}</span>
+        ${user.role === "admin" ? "" : `<button class="secondary-button" type="button" data-stored-signing="${escapeHtml(user.username)}" data-enabled="${user.storedSigningAccess ? "false" : "true"}">${user.storedSigningAccess ? "Remove Stored" : "Allow Stored"}</button>`}
         ${user.role === "admin" ? "" : `<button class="secondary-button danger-button" type="button" data-delete-user="${escapeHtml(user.username)}">Delete</button>`}
       </div>
     </article>
@@ -209,6 +217,7 @@ document.addEventListener("click", async (event) => {
   const approveUserButton = event.target.closest("[data-approve-user]");
   const rejectUserButton = event.target.closest("[data-reject-user]");
   const deleteUserButton = event.target.closest("[data-delete-user]");
+  const storedSigningButton = event.target.closest("[data-stored-signing]");
   const approveResetButton = event.target.closest("[data-approve-reset]");
   const rejectResetButton = event.target.closest("[data-reject-reset]");
 
@@ -216,6 +225,7 @@ document.addEventListener("click", async (event) => {
     if (approveUserButton) await approveUser(approveUserButton.dataset.approveUser);
     if (rejectUserButton) await rejectUser(rejectUserButton.dataset.rejectUser);
     if (deleteUserButton) await deleteUser(deleteUserButton.dataset.deleteUser);
+    if (storedSigningButton) await setStoredSigningAccess(storedSigningButton.dataset.storedSigning, storedSigningButton.dataset.enabled === "true");
     if (approveResetButton) await approveReset(approveResetButton.dataset.approveReset, approveResetButton.dataset.username);
     if (rejectResetButton) await rejectReset(rejectResetButton.dataset.rejectReset, rejectResetButton.dataset.username);
   } catch (error) {

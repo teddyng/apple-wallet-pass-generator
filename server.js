@@ -17,6 +17,11 @@ const PUBLIC_DIR = path.join(ROOT, "public");
 const USER_DB_PATH = process.env.USER_DB_PATH || path.join(ROOT, "data", "users.json");
 const AUDIT_LOG_PATH = process.env.AUDIT_LOG_PATH || path.join(ROOT, "data", "audit.log");
 const DATABASE_URL = process.env.DATABASE_URL || "";
+const STORED_P12_PATH = process.env.STORED_P12_PATH || "";
+const STORED_P12_BASE64 = process.env.STORED_P12_BASE64 || "";
+const STORED_P12_PASSWORD = process.env.STORED_P12_PASSWORD || "";
+const STORED_WWDR_PATH = process.env.STORED_WWDR_PATH || process.env.STORED_WWDC_PATH || "";
+const STORED_WWDR_BASE64 = process.env.STORED_WWDR_BASE64 || process.env.STORED_WWDC_BASE64 || "";
 const MAX_BODY_BYTES = 30 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_SIGNING_FILE_BYTES = 5 * 1024 * 1024;
@@ -248,6 +253,16 @@ function emptyUserStore() {
   };
 }
 
+function normalizeUserStore(store) {
+  if (!store || typeof store !== "object") store = emptyUserStore();
+  if (!Array.isArray(store.users)) store.users = [];
+  if (!Array.isArray(store.resetRequests)) store.resetRequests = [];
+  for (const user of store.users) {
+    user.storedSigningAccess = user.role === "admin" || user.storedSigningAccess === true;
+  }
+  return store;
+}
+
 async function loadUserStore() {
   if (DATABASE_URL) return loadPostgresUserStore();
   return loadFileUserStore();
@@ -270,8 +285,7 @@ async function loadFileUserStore() {
     store = emptyUserStore();
   }
 
-  if (!Array.isArray(store.users)) store.users = [];
-  if (!Array.isArray(store.resetRequests)) store.resetRequests = [];
+  store = normalizeUserStore(store);
 
   const adminExists = store.users.some((user) => normalizeUsername(user.username) === ADMIN_USERNAME);
   if (!adminExists && ADMIN_PASSWORD) {
@@ -280,6 +294,7 @@ async function loadFileUserStore() {
       passwordHash: hashPassword(ADMIN_PASSWORD),
       role: "admin",
       status: "active",
+      storedSigningAccess: true,
       createdAt: new Date().toISOString(),
       approvedAt: new Date().toISOString()
     });
@@ -328,6 +343,7 @@ async function ensurePostgresSchema() {
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL CHECK (role IN ('admin', 'user')),
       status TEXT NOT NULL CHECK (status IN ('active', 'pending', 'rejected')),
+      stored_signing_access BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMPTZ NOT NULL,
       approved_at TIMESTAMPTZ,
       rejected_at TIMESTAMPTZ
@@ -352,6 +368,8 @@ async function ensurePostgresSchema() {
     );
   `);
 
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS stored_signing_access BOOLEAN NOT NULL DEFAULT FALSE");
+
   postgresSchemaReady = true;
 }
 
@@ -368,6 +386,7 @@ function dbUser(row) {
     passwordHash: row.password_hash,
     role: row.role,
     status: row.status,
+    storedSigningAccess: row.role === "admin" || row.stored_signing_access === true,
     createdAt: isoDate(row.created_at),
     approvedAt: isoDate(row.approved_at),
     rejectedAt: isoDate(row.rejected_at)
@@ -388,8 +407,8 @@ function dbResetRequest(row) {
 async function seedPostgresAdmin(pool) {
   if (!ADMIN_PASSWORD) return;
   await pool.query(`
-    INSERT INTO users (username, password_hash, role, status, created_at, approved_at)
-    VALUES ($1, $2, 'admin', 'active', NOW(), NOW())
+    INSERT INTO users (username, password_hash, role, status, stored_signing_access, created_at, approved_at)
+    VALUES ($1, $2, 'admin', 'active', TRUE, NOW(), NOW())
     ON CONFLICT (username) DO NOTHING
   `, [ADMIN_USERNAME, hashPassword(ADMIN_PASSWORD)]);
 }
@@ -426,13 +445,14 @@ async function savePostgresUserStore(store) {
 
     for (const user of store.users) {
       await client.query(`
-        INSERT INTO users (username, password_hash, role, status, created_at, approved_at, rejected_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO users (username, password_hash, role, status, stored_signing_access, created_at, approved_at, rejected_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       `, [
         normalizeUsername(user.username),
         user.passwordHash,
         user.role,
         user.status,
+        user.role === "admin" || user.storedSigningAccess === true,
         nullableDate(user.createdAt) || new Date(),
         nullableDate(user.approvedAt),
         nullableDate(user.rejectedAt)
@@ -472,10 +492,23 @@ function publicUser(user) {
     username: user.username,
     role: user.role,
     status: user.status,
+    storedSigningAccess: user.role === "admin" || user.storedSigningAccess === true,
     createdAt: user.createdAt,
     approvedAt: user.approvedAt,
     rejectedAt: user.rejectedAt
   };
+}
+
+function isStoredSigningConfigured() {
+  return Boolean((STORED_P12_PATH || STORED_P12_BASE64) && (STORED_WWDR_PATH || STORED_WWDR_BASE64));
+}
+
+async function canSessionUseStoredSigning(session) {
+  if (!session) return false;
+  if (session.role === "admin") return true;
+  const store = await loadUserStore();
+  const user = findUser(store, session.username);
+  return Boolean(user && user.status === "active" && user.storedSigningAccess === true);
 }
 
 function publicResetRequest(request) {
@@ -578,6 +611,7 @@ function buildAdminMetrics(store, auditEntries) {
   return {
     totalUsers: store.users.length,
     activeUsers,
+    storedSigningUsers: store.users.filter((user) => user.role === "admin" || user.storedSigningAccess === true).length,
     pendingUsers,
     pendingResets,
     successfulLogins24h: lastDayEntries.filter((entry) => entry.event === "login_success").length,
@@ -809,6 +843,7 @@ async function handleRegister(req, res) {
       existing.passwordHash = hashPassword(password);
       existing.status = "pending";
       existing.role = "user";
+      existing.storedSigningAccess = false;
       existing.rejectedAt = undefined;
       existing.createdAt = new Date().toISOString();
     } else {
@@ -817,6 +852,7 @@ async function handleRegister(req, res) {
         passwordHash: hashPassword(password),
         role: "user",
         status: "pending",
+        storedSigningAccess: false,
         createdAt: new Date().toISOString()
       });
     }
@@ -890,7 +926,9 @@ async function handleMe(req, res) {
   }
   sendJson(res, 200, {
     username: session.username,
-    role: session.role
+    role: session.role,
+    canUseStoredSigning: await canSessionUseStoredSigning(session),
+    storedSigningConfigured: isStoredSigningConfigured()
   });
 }
 
@@ -966,6 +1004,23 @@ async function handleDeleteUser(req, res) {
   await saveUserStore(store);
   await audit("user_deleted", { username }, req);
   sendJson(res, 200, { user: publicUser(deletedUser) });
+}
+
+async function handleStoredSigningAccess(req, res) {
+  checkRateLimit(req, "admin");
+  if (!requireAdmin(req, res)) return;
+  const input = await collectJson(req);
+  const username = normalizeUsername(input.username);
+  if (username === ADMIN_USERNAME) throw new UserError("The admin account already has stored signing access.");
+
+  const store = await loadUserStore();
+  const user = findUser(store, username);
+  if (!user) throw new UserError("User not found.", 404);
+
+  user.storedSigningAccess = boolValue(input.enabled);
+  await saveUserStore(store);
+  await audit("stored_signing_access_updated", { username, enabled: user.storedSigningAccess }, req);
+  sendJson(res, 200, { user: publicUser(user) });
 }
 
 async function handleApproveReset(req, res) {
@@ -1385,6 +1440,8 @@ function validateUploadPayloads(input) {
     });
   }
 
+  if (signing.mode === "stored") return;
+
   if (signing.mode === "p12") {
     assertAllowedUpload(signing.p12, "P12 certificate", {
       maxBytes: MAX_SIGNING_FILE_BYTES,
@@ -1510,7 +1567,95 @@ function hasCertificatePem(filePath) {
   return data.includes("-----BEGIN CERTIFICATE-----");
 }
 
-async function prepareSigning(tmpRoot, input) {
+async function readStoredSigningBuffer(label, filePath, base64Value) {
+  let buffer = null;
+
+  if (base64Value) {
+    const clean = String(base64Value).includes(",")
+      ? String(base64Value).split(",").pop()
+      : String(base64Value);
+    buffer = Buffer.from(clean, "base64");
+  } else if (filePath) {
+    buffer = await fs.readFile(filePath);
+  }
+
+  if (!buffer || !buffer.length) {
+    throw new UserError(`${label} is not configured on the server.`, 500);
+  }
+
+  if (buffer.length > MAX_SIGNING_FILE_BYTES) {
+    throw new UserError(`${label} is too large. Max size is ${Math.round(MAX_SIGNING_FILE_BYTES / 1024 / 1024)} MB.`, 500);
+  }
+
+  return buffer;
+}
+
+async function prepareP12Signing(signingDir, p12Buffer, p12Password, wwdrBuffer) {
+  const p12Path = path.join(signingDir, "certificate.p12");
+  const signerCertPath = path.join(signingDir, "signer.pem");
+  const privateKeyPath = path.join(signingDir, "private-key.pem");
+  const wwdrPath = path.join(signingDir, "wwdr.pem");
+  await fs.writeFile(p12Path, p12Buffer);
+
+  const passin = `pass:${stringValue(p12Password)}`;
+
+  await execOpenSsl([
+    "pkcs12",
+    "-in",
+    p12Path,
+    "-clcerts",
+    "-nokeys",
+    "-out",
+    signerCertPath,
+    "-passin",
+    passin
+  ], "Could not extract the signing certificate from the P12 file.");
+
+  await execOpenSsl([
+    "pkcs12",
+    "-in",
+    p12Path,
+    "-nocerts",
+    "-nodes",
+    "-out",
+    privateKeyPath,
+    "-passin",
+    passin
+  ], "Could not extract the private key from the P12 file.");
+
+  if (wwdrBuffer && wwdrBuffer.length) {
+    await writeCertificatePem({ data: wwdrBuffer.toString("base64") }, wwdrPath, "WWDR Certificate");
+  } else {
+    try {
+      await execOpenSsl([
+        "pkcs12",
+        "-in",
+        p12Path,
+        "-cacerts",
+        "-nokeys",
+        "-out",
+        wwdrPath,
+        "-passin",
+        passin
+      ], "Could not extract an intermediate certificate from the P12 file.");
+    } catch {
+      // The explicit WWDR validation below will provide the user-facing error.
+    }
+  }
+
+  if (!hasCertificatePem(wwdrPath)) {
+    throw new UserError("WWDR Certificate is required. Add the Apple Worldwide Developer Relations intermediate certificate.");
+  }
+
+  return {
+    signerCertPath,
+    privateKeyPath,
+    wwdrPath,
+    privateKeyPassphrase: ""
+  };
+}
+
+async function prepareSigning(tmpRoot, input, session) {
   const signing = input.signing || {};
   const signingDir = path.join(tmpRoot, "signing");
   await fs.mkdir(signingDir, { recursive: true });
@@ -1519,69 +1664,28 @@ async function prepareSigning(tmpRoot, input) {
   const privateKeyPath = path.join(signingDir, "private-key.pem");
   const wwdrPath = path.join(signingDir, "wwdr.pem");
 
+  if (signing.mode === "stored") {
+    if (!isStoredSigningConfigured()) {
+      throw new UserError("Stored signing is not configured on this server.", 500);
+    }
+    if (!await canSessionUseStoredSigning(session)) {
+      throw new UserError("Your account is not in the stored signing group.", 403);
+    }
+
+    const [p12Buffer, wwdrBuffer] = await Promise.all([
+      readStoredSigningBuffer("Stored P12 certificate", STORED_P12_PATH, STORED_P12_BASE64),
+      readStoredSigningBuffer("Stored WWDR certificate", STORED_WWDR_PATH, STORED_WWDR_BASE64)
+    ]);
+    return prepareP12Signing(signingDir, p12Buffer, STORED_P12_PASSWORD, wwdrBuffer);
+  }
+
   if (signing.mode === "p12") {
     const p12 = filePayloadToBuffer(signing.p12);
     if (!p12 || !p12.length) {
       throw new UserError("P12 certificate is required.");
     }
-    const p12Path = path.join(signingDir, "certificate.p12");
-    await fs.writeFile(p12Path, p12);
-    const passin = `pass:${stringValue(signing.p12Password)}`;
-
-    await execOpenSsl([
-      "pkcs12",
-      "-in",
-      p12Path,
-      "-clcerts",
-      "-nokeys",
-      "-out",
-      signerCertPath,
-      "-passin",
-      passin
-    ], "Could not extract the signing certificate from the P12 file.");
-
-    await execOpenSsl([
-      "pkcs12",
-      "-in",
-      p12Path,
-      "-nocerts",
-      "-nodes",
-      "-out",
-      privateKeyPath,
-      "-passin",
-      passin
-    ], "Could not extract the private key from the P12 file.");
-
-    if (signing.wwdrCertificate) {
-      await writeCertificatePem(signing.wwdrCertificate, wwdrPath, "WWDR Certificate");
-    } else {
-      try {
-        await execOpenSsl([
-          "pkcs12",
-          "-in",
-          p12Path,
-          "-cacerts",
-          "-nokeys",
-          "-out",
-          wwdrPath,
-          "-passin",
-          passin
-        ], "Could not extract an intermediate certificate from the P12 file.");
-      } catch {
-        // The explicit WWDR validation below will provide the user-facing error.
-      }
-    }
-
-    if (!hasCertificatePem(wwdrPath)) {
-      throw new UserError("WWDR Certificate is required. Add the Apple Worldwide Developer Relations intermediate certificate.");
-    }
-
-    return {
-      signerCertPath,
-      privateKeyPath,
-      wwdrPath,
-      privateKeyPassphrase: ""
-    };
+    const wwdrBuffer = filePayloadToBuffer(signing.wwdrCertificate);
+    return prepareP12Signing(signingDir, p12, signing.p12Password, wwdrBuffer);
   }
 
   await writeCertificatePem(signing.certificate, signerCertPath, "Signing Certificate");
@@ -1645,7 +1749,7 @@ async function execOpenSsl(args, fallbackMessage) {
   }
 }
 
-async function generatePass(input) {
+async function generatePass(input, session) {
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "wallet-pass-"));
   const bundleDir = path.join(tmpRoot, "bundle");
   const outputPath = path.join(tmpRoot, "pass.pkpass");
@@ -1660,7 +1764,7 @@ async function generatePass(input) {
     const manifest = await createManifest(bundleDir);
     await fs.writeFile(path.join(bundleDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 
-    const signingInfo = await prepareSigning(tmpRoot, input);
+    const signingInfo = await prepareSigning(tmpRoot, input, session);
     await signManifest(bundleDir, signingInfo);
     await packagePass(bundleDir, outputPath);
 
@@ -1678,8 +1782,8 @@ async function handleGenerate(req, res) {
   checkRateLimit(req, "generate");
   const input = await collectJson(req);
   validateUploadPayloads(input);
-  const result = await generatePass(input);
   const session = readSession(req);
+  const result = await generatePass(input, session);
   await audit("pass_generated", {
     username: session ? session.username : null,
     passStyle: stringValue(input.pass && input.pass.passStyle, "generic")
@@ -1705,6 +1809,7 @@ async function handleGenerateBulk(req, res) {
   }
 
   validateUploadPayloads(template);
+  const session = readSession(req);
 
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "wallet-pass-bulk-"));
   const zipDir = path.join(tmpRoot, "passes");
@@ -1720,14 +1825,13 @@ async function handleGenerateBulk(req, res) {
       }
 
       const rowInput = applyBulkRow(template, row, index);
-      const result = await generatePass(rowInput);
+      const result = await generatePass(rowInput, session);
       const filename = uniqueZipFileName(result.filename, usedNames);
       await fs.writeFile(path.join(zipDir, filename), result.data);
     }
 
     await packagePass(zipDir, zipPath);
     const data = await fs.readFile(zipPath);
-    const session = readSession(req);
     await audit("bulk_passes_generated", {
       username: session ? session.username : null,
       count: rows.length,
@@ -1837,7 +1941,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/healthz") {
       sendJson(res, 200, {
         ok: true,
-        storage: DATABASE_URL ? "postgres" : "file"
+        storage: DATABASE_URL ? "postgres" : "file",
+        storedSigningConfigured: isStoredSigningConfigured()
       });
       return;
     }
@@ -1923,6 +2028,11 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/admin/users/delete") {
       await handleDeleteUser(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/admin/users/stored-signing") {
+      await handleStoredSigningAccess(req, res);
       return;
     }
 

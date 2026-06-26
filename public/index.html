@@ -12,11 +12,12 @@
       <header class="topbar">
         <div class="title-block">
           <span class="eyebrow">Apple Wallet</span>
-          <h1>Wallet Pass Studio <span class="version-badge">v1.5.0</span></h1>
+          <h1>Wallet Pass Studio <span class="version-badge">v1.6.0</span></h1>
         </div>
         <div class="top-actions">
           <a class="secondary-button is-hidden" id="adminLink" href="/admin">Admin</a>
           <button class="secondary-button" type="button" data-theme-toggle>Dark mode</button>
+          <button class="secondary-button" id="clearEditorButton" type="button">Clear</button>
           <a class="secondary-button" href="/logout">Sign out</a>
           <button class="primary-button" id="generateButton" type="button">
             <span aria-hidden="true">↓</span>
@@ -320,6 +321,7 @@ ACME-20003,ACME-20003,Free Pastry,Chris Wong,2100,Platinum</textarea>
             <div class="segment" role="tablist" aria-label="Signing input mode">
               <button type="button" class="segment-button is-active" data-signing-mode="p12">P12</button>
               <button type="button" class="segment-button" data-signing-mode="pem">PEM</button>
+              <button type="button" class="segment-button" data-signing-mode="stored">Stored</button>
             </div>
 
             <div class="signing-mode is-active" data-signing-panel="p12">
@@ -378,6 +380,13 @@ ACME-20003,ACME-20003,Free Pastry,Chris Wong,2100,Platinum</textarea>
                 <span>WWDR Certificate PEM</span>
                 <textarea id="wwdrText" spellcheck="false"></textarea>
               </label>
+            </div>
+
+            <div class="signing-mode" data-signing-panel="stored">
+              <div class="security-note">
+                <strong>Stored signing group</strong>
+                <span id="storedSigningNotice">Checking stored signing access...</span>
+              </div>
             </div>
           </section>
         </form>
