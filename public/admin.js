@@ -1,12 +1,16 @@
 const adminState = {
   users: [],
-  resetRequests: []
+  resetRequests: [],
+  loginLogs: [],
+  metrics: {}
 };
 
 const adminStatus = document.querySelector("#adminStatus");
+const adminMetrics = document.querySelector("#adminMetrics");
 const pendingUsers = document.querySelector("#pendingUsers");
 const pendingResets = document.querySelector("#pendingResets");
 const allUsers = document.querySelector("#allUsers");
+const loginLogs = document.querySelector("#loginLogs");
 
 function escapeHtml(value) {
   return String(value)
@@ -81,6 +85,38 @@ function emptyMarkup(label) {
   return `<div class="empty-state">${escapeHtml(label)}</div>`;
 }
 
+function metricMarkup(label, value) {
+  return `
+    <article class="metric-tile">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </article>
+  `;
+}
+
+function renderMetrics() {
+  const metrics = adminState.metrics || {};
+  adminMetrics.innerHTML = [
+    metricMarkup("Total Users", metrics.totalUsers ?? 0),
+    metricMarkup("Active Users", metrics.activeUsers ?? 0),
+    metricMarkup("Pending Accounts", metrics.pendingUsers ?? 0),
+    metricMarkup("Pending Resets", metrics.pendingResets ?? 0),
+    metricMarkup("Logins 24h", metrics.successfulLogins24h ?? 0),
+    metricMarkup("Failed Logins 24h", metrics.failedLogins24h ?? 0),
+    metricMarkup("Passes 24h", metrics.generatedPasses24h ?? 0)
+  ].join("");
+}
+
+function loginEventLabel(event) {
+  return {
+    login_success: "Signed in",
+    login_failed: "Failed",
+    login_pending: "Pending account",
+    login_inactive: "Inactive account",
+    login_setup_missing: "Setup missing"
+  }[event] || "Login";
+}
+
 function renderPendingUsers() {
   const users = adminState.users.filter((user) => user.status === "pending");
   pendingUsers.innerHTML = users.length ? users.map((user) => `
@@ -128,10 +164,26 @@ function renderUsers() {
   `).join("") : emptyMarkup("No users yet.");
 }
 
+function renderLoginLogs() {
+  loginLogs.innerHTML = adminState.loginLogs.length ? adminState.loginLogs.map((log) => `
+    <article class="admin-item login-log-item">
+      <div>
+        <strong>${escapeHtml(log.username)}</strong>
+        <span>${escapeHtml(loginEventLabel(log.event))} · ${escapeHtml(formatDate(log.at))}</span>
+      </div>
+      <div class="admin-actions">
+        <span>${escapeHtml(log.ip || "unknown")}</span>
+      </div>
+    </article>
+  `).join("") : emptyMarkup("No login activity yet.");
+}
+
 function render() {
+  renderMetrics();
   renderPendingUsers();
   renderPendingResets();
   renderUsers();
+  renderLoginLogs();
 }
 
 async function loadAdminState() {
@@ -144,6 +196,8 @@ async function loadAdminState() {
   const payload = await response.json();
   adminState.users = payload.users || [];
   adminState.resetRequests = payload.resetRequests || [];
+  adminState.loginLogs = payload.loginLogs || [];
+  adminState.metrics = payload.metrics || {};
   render();
 
   const pendingCount = adminState.users.filter((user) => user.status === "pending").length;

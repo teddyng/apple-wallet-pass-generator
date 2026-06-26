@@ -37,6 +37,13 @@ const RATE_LIMIT_RULES = {
   generate: { limit: 20, windowMs: 10 * 60 * 1000 },
   admin: { limit: 80, windowMs: 10 * 60 * 1000 }
 };
+const LOGIN_AUDIT_EVENTS = new Set([
+  "login_success",
+  "login_failed",
+  "login_pending",
+  "login_inactive",
+  "login_setup_missing"
+]);
 let postgresPool = null;
 let postgresSchemaReady = false;
 
@@ -481,6 +488,104 @@ function publicResetRequest(request) {
   };
 }
 
+function auditUsername(entry) {
+  const details = entry && typeof entry.details === "object" && entry.details ? entry.details : {};
+  return stringValue(details.username || entry.username || entry.actor, "unknown");
+}
+
+function publicLoginLog(entry) {
+  return {
+    at: isoDate(entry.at),
+    username: auditUsername(entry),
+    event: stringValue(entry.event, "login_unknown"),
+    ip: stringValue(entry.ip, "unknown")
+  };
+}
+
+function auditEntryFromPostgresRow(row) {
+  return {
+    at: isoDate(row.at),
+    event: row.event,
+    actor: row.actor,
+    ip: row.ip,
+    details: row.details && typeof row.details === "object" ? row.details : {}
+  };
+}
+
+async function loadPostgresAuditEntries(limit = 500) {
+  await ensurePostgresSchema();
+  const pool = getPostgresPool();
+  const result = await pool.query(`
+    SELECT at, event, actor, ip, details
+    FROM audit_log
+    ORDER BY at DESC, id DESC
+    LIMIT $1
+  `, [limit]);
+  return result.rows.map(auditEntryFromPostgresRow);
+}
+
+async function loadFileAuditEntries(limit = 500) {
+  let text = "";
+  try {
+    text = await fs.readFile(AUDIT_LOG_PATH, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+
+  return text
+    .split("\n")
+    .filter(Boolean)
+    .reverse()
+    .slice(0, limit)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+async function loadAuditEntries(limit = 500) {
+  if (DATABASE_URL) return loadPostgresAuditEntries(limit);
+  return loadFileAuditEntries(limit);
+}
+
+function isWithinHours(value, hours) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  return Date.now() - date.getTime() <= hours * 60 * 60 * 1000;
+}
+
+function buildAdminMetrics(store, auditEntries) {
+  const activeUsers = store.users.filter((user) => user.status === "active").length;
+  const pendingUsers = store.users.filter((user) => user.status === "pending").length;
+  const pendingResets = store.resetRequests.filter((request) => request.status === "pending").length;
+  const lastDayEntries = auditEntries.filter((entry) => isWithinHours(entry.at, 24));
+
+  const generatedPasses24h = lastDayEntries.reduce((count, entry) => {
+    if (entry.event === "pass_generated") return count + 1;
+    if (entry.event === "bulk_passes_generated") {
+      const details = entry.details && typeof entry.details === "object" ? entry.details : {};
+      const bulkCount = Number(details.count);
+      return count + (Number.isFinite(bulkCount) && bulkCount > 0 ? bulkCount : 0);
+    }
+    return count;
+  }, 0);
+
+  return {
+    totalUsers: store.users.length,
+    activeUsers,
+    pendingUsers,
+    pendingResets,
+    successfulLogins24h: lastDayEntries.filter((entry) => entry.event === "login_success").length,
+    failedLogins24h: lastDayEntries.filter((entry) => entry.event === "login_failed").length,
+    generatedPasses24h
+  };
+}
+
 function createSessionToken(user) {
   const payload = base64Url(JSON.stringify({
     username: user.username,
@@ -792,10 +897,20 @@ async function handleMe(req, res) {
 async function handleAdminState(req, res) {
   checkRateLimit(req, "admin");
   if (!requireAdmin(req, res)) return;
-  const store = await loadUserStore();
+  const [store, auditEntries] = await Promise.all([
+    loadUserStore(),
+    loadAuditEntries(500)
+  ]);
+  const loginLogs = auditEntries
+    .filter((entry) => LOGIN_AUDIT_EVENTS.has(entry.event))
+    .slice(0, 50)
+    .map(publicLoginLog);
+
   sendJson(res, 200, {
     users: store.users.map(publicUser),
-    resetRequests: store.resetRequests.map(publicResetRequest)
+    resetRequests: store.resetRequests.map(publicResetRequest),
+    loginLogs,
+    metrics: buildAdminMetrics(store, auditEntries)
   });
 }
 

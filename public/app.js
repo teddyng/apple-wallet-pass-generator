@@ -37,6 +37,16 @@ function checked(id) {
   return $(`#${id}`).checked;
 }
 
+function write(id, value) {
+  const input = $(`#${id}`);
+  if (input) input.value = value === undefined || value === null ? "" : String(value);
+}
+
+function setChecked(id, value) {
+  const input = $(`#${id}`);
+  if (input) input.checked = Boolean(value);
+}
+
 function setStatus(message, tone = "") {
   const status = $("#statusText");
   status.textContent = message;
@@ -206,6 +216,100 @@ function colorAsRgb(hex) {
   const g = parseInt(clean.slice(2, 4), 16);
   const b = parseInt(clean.slice(4, 6), 16);
   return `rgb(${r}, ${g}, ${b})`;
+}
+
+function byteToHex(value) {
+  return Math.max(0, Math.min(255, Number(value) || 0))
+    .toString(16)
+    .padStart(2, "0");
+}
+
+function colorInputValue(value, fallback) {
+  const text = String(value || "").trim();
+  if (/^#[0-9a-f]{6}$/i.test(text)) return text;
+
+  const rgb = text.match(/^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/i);
+  if (rgb) {
+    return `#${byteToHex(rgb[1])}${byteToHex(rgb[2])}${byteToHex(rgb[3])}`;
+  }
+
+  return fallback;
+}
+
+function datetimeLocalValue(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+function cleanImportedFields(fields) {
+  if (!Array.isArray(fields)) return [];
+  return fields.map((field, index) => {
+    const item = field && typeof field === "object" ? field : {};
+    const output = {
+      key: String(item.key || `field${index + 1}`),
+      label: String(item.label || ""),
+      value: item.value === undefined || item.value === null ? "" : String(item.value)
+    };
+    if (item.textAlignment) output.textAlignment = String(item.textAlignment);
+    if (item.changeMessage) output.changeMessage = String(item.changeMessage);
+    return output;
+  });
+}
+
+function detectPassStyle(pass) {
+  return ["generic", "coupon", "storeCard", "eventTicket", "boardingPass"].find((style) => {
+    return pass && pass[style] && typeof pass[style] === "object";
+  }) || "generic";
+}
+
+function applyPassJson(pass) {
+  if (!pass || typeof pass !== "object" || Array.isArray(pass)) {
+    throw new Error("Paste a valid pass.json object.");
+  }
+
+  const style = detectPassStyle(pass);
+  const stylePayload = pass[style] || {};
+  write("passStyle", style);
+  write("transitType", stylePayload.transitType || "PKTransitTypeGeneric");
+  write("passTypeIdentifier", pass.passTypeIdentifier || "");
+  write("teamIdentifier", pass.teamIdentifier || "");
+  write("organizationName", pass.organizationName || "");
+  write("serialNumber", pass.serialNumber || "");
+  write("description", pass.description || "");
+  write("logoText", pass.logoText || "");
+  write("relevantDate", datetimeLocalValue(pass.relevantDate));
+  write("expirationDate", datetimeLocalValue(pass.expirationDate));
+  write("associatedStoreIdentifiers", Array.isArray(pass.associatedStoreIdentifiers) ? pass.associatedStoreIdentifiers.join(", ") : "");
+  setChecked("sharingProhibited", pass.sharingProhibited === true);
+  setChecked("voided", pass.voided === true);
+
+  write("backgroundColor", colorInputValue(pass.backgroundColor, read("backgroundColor")));
+  write("foregroundColor", colorInputValue(pass.foregroundColor, read("foregroundColor")));
+  write("labelColor", colorInputValue(pass.labelColor, read("labelColor")));
+
+  state.primaryFields = cleanImportedFields(stylePayload.primaryFields);
+  state.secondaryFields = cleanImportedFields(stylePayload.secondaryFields);
+  state.auxiliaryFields = cleanImportedFields(stylePayload.auxiliaryFields);
+  state.backFields = cleanImportedFields(stylePayload.backFields);
+
+  const barcode = Array.isArray(pass.barcodes) && pass.barcodes.length ? pass.barcodes[0] : pass.barcode;
+  setChecked("barcodeEnabled", Boolean(barcode && barcode.message));
+  write("barcodeFormat", barcode && barcode.format ? barcode.format : "PKBarcodeFormatQR");
+  write("barcodeEncoding", barcode && barcode.messageEncoding ? barcode.messageEncoding : "iso-8859-1");
+  write("barcodeMessage", barcode && barcode.message ? barcode.message : "");
+  write("barcodeAltText", barcode && barcode.altText ? barcode.altText : "");
+
+  const location = Array.isArray(pass.locations) && pass.locations.length ? pass.locations[0] : null;
+  write("locationLatitude", location && Number.isFinite(Number(location.latitude)) ? location.latitude : "");
+  write("locationLongitude", location && Number.isFinite(Number(location.longitude)) ? location.longitude : "");
+  write("locationText", location && location.relevantText ? location.relevantText : "");
+
+  renderAllFieldRows();
+  $$(".boarding-only").forEach((node) => node.classList.toggle("is-hidden", style !== "boardingPass"));
+  updatePreview();
 }
 
 function hashString(value) {
@@ -676,6 +780,51 @@ async function responseError(response, fallback) {
   return new Error(text || fallback);
 }
 
+async function copyJsonPreview() {
+  const json = JSON.stringify(passJsonPreview(), null, 2);
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(json);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = json;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    }
+    lockStatus("JSON copied.", "success", 4000);
+  } catch {
+    $("#jsonImport").value = json;
+    lockStatus("JSON placed in paste box.", "success", 5000);
+  } finally {
+    window.setTimeout(syncStatus, 5500);
+  }
+}
+
+function applyJsonImport() {
+  const textarea = $("#jsonImport");
+  const raw = textarea.value.trim();
+  if (!raw) {
+    lockStatus("Paste JSON first.", "error", 6000);
+    window.setTimeout(syncStatus, 6500);
+    return;
+  }
+
+  try {
+    const pass = JSON.parse(raw);
+    applyPassJson(pass);
+    lockStatus("JSON applied.", "success", 5000);
+    window.setTimeout(syncStatus, 5500);
+  } catch (error) {
+    lockStatus(error.message || "Could not apply JSON.", "error", 8000);
+    window.setTimeout(syncStatus, 8500);
+  }
+}
+
 async function generatePass() {
   const button = $("#generateButton");
   button.disabled = true;
@@ -780,6 +929,8 @@ function bindEvents() {
 
   $("#generateButton").addEventListener("click", generatePass);
   $("#bulkGenerateButton").addEventListener("click", generateBulkPasses);
+  $("#copyJsonButton").addEventListener("click", copyJsonPreview);
+  $("#applyJsonButton").addEventListener("click", applyJsonImport);
 
   $("#passForm").addEventListener("input", (event) => {
     const row = event.target.closest(".field-row");

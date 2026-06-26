@@ -12,7 +12,7 @@
       <header class="topbar">
         <div class="title-block">
           <span class="eyebrow">Apple Wallet</span>
-          <h1>Wallet Pass Studio <span class="version-badge">v1.3.0</span></h1>
+          <h1>Wallet Pass Studio <span class="version-badge">v1.5.0</span></h1>
         </div>
         <div class="top-actions">
           <a class="secondary-button is-hidden" id="adminLink" href="/admin">Admin</a>
@@ -406,7 +406,17 @@ ACME-20003,ACME-20003,Free Pastry,Chris Wong,2100,Platinum</textarea>
           </div>
 
           <div class="preview-view" data-preview-panel="json">
-            <pre class="json-preview" id="jsonPreview"></pre>
+            <div class="json-tools">
+              <div class="json-actions">
+                <button class="secondary-button" id="copyJsonButton" type="button">Copy JSON</button>
+                <button class="primary-button" id="applyJsonButton" type="button">Apply JSON</button>
+              </div>
+              <label class="textarea-field">
+                <span>Paste JSON</span>
+                <textarea id="jsonImport" spellcheck="false"></textarea>
+              </label>
+              <pre class="json-preview" id="jsonPreview"></pre>
+            </div>
           </div>
         </aside>
       </div>

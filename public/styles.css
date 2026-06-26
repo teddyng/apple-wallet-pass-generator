@@ -670,8 +670,30 @@ input[type="color"] {
   overflow-wrap: anywhere;
 }
 
+.json-tools {
+  width: min(100%, 680px);
+  display: grid;
+  gap: 14px;
+}
+
+.json-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.json-actions .primary-button,
+.json-actions .secondary-button {
+  min-width: 120px;
+}
+
+#jsonImport {
+  min-height: 170px;
+}
+
 .json-preview {
-  width: min(100%, 640px);
+  width: 100%;
   min-height: 500px;
   margin: 0;
   padding: 18px;
@@ -832,6 +854,40 @@ input[type="color"] {
   border-color: #f2b8b5;
 }
 
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(110px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.metric-tile {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.metric-tile span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+
+.metric-tile strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--ink);
+  font-size: 26px;
+  line-height: 1;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
 .admin-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -884,6 +940,11 @@ input[type="color"] {
   gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.login-log-item .admin-actions span {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
 }
 
 .danger-button {
@@ -947,6 +1008,10 @@ input[type="color"] {
     grid-template-columns: 1fr;
   }
 
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .admin-grid .span-2 {
     grid-column: auto;
   }
@@ -989,6 +1054,10 @@ input[type="color"] {
   }
 
   .auth-tabs {
+    grid-template-columns: 1fr;
+  }
+
+  .metric-grid {
     grid-template-columns: 1fr;
   }
 

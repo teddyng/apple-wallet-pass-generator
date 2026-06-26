@@ -41,7 +41,9 @@ The app includes:
 - Login/account/password-reset rate limiting.
 - Upload size/type checks for images and signing files.
 - Image previews for uploaded pass artwork.
+- Copy and paste supported pass JSON from the editor.
 - Admin audit logging to `data/audit.log`.
+- Admin metrics and login activity with IP addresses.
 - A sticky footer with live app status.
 - A live barcode preview in the pass editor.
 - Light/dark mode.
