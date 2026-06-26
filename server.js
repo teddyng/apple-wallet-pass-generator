@@ -16,10 +16,12 @@ const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
 const USER_DB_PATH = process.env.USER_DB_PATH || path.join(ROOT, "data", "users.json");
 const AUDIT_LOG_PATH = process.env.AUDIT_LOG_PATH || path.join(ROOT, "data", "audit.log");
+const DATABASE_URL = process.env.DATABASE_URL || "";
 const MAX_BODY_BYTES = 30 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_SIGNING_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_PASTED_PEM_BYTES = 128 * 1024;
+const MAX_BULK_PASSES = 50;
 const SESSION_COOKIE_NAME = "wallet_pass_session";
 const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
 const ADMIN_USERNAME = normalizeUsername(process.env.ADMIN_USERNAME || "admin");
@@ -35,6 +37,8 @@ const RATE_LIMIT_RULES = {
   generate: { limit: 20, windowMs: 10 * 60 * 1000 },
   admin: { limit: 80, windowMs: 10 * 60 * 1000 }
 };
+let postgresPool = null;
+let postgresSchemaReady = false;
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -91,7 +95,7 @@ function sendErrorPage(res, status, title, message) {
         <a class="primary-button" href="/">Back to studio</a>
       </section>
       <footer class="site-footer login-footer">
-        <span>Created by Teddy Ng. Powered by Codex. Hosted by Render.</span>
+        <span>Created by Teddy Ng. Powered by Codex. Hosted by Render and Neon.</span>
       </footer>
     </main>
   </body>
@@ -238,6 +242,19 @@ function emptyUserStore() {
 }
 
 async function loadUserStore() {
+  if (DATABASE_URL) return loadPostgresUserStore();
+  return loadFileUserStore();
+}
+
+async function saveUserStore(store) {
+  if (DATABASE_URL) {
+    await savePostgresUserStore(store);
+    return;
+  }
+  await saveFileUserStore(store);
+}
+
+async function loadFileUserStore() {
   let store;
   try {
     store = JSON.parse(await fs.readFile(USER_DB_PATH, "utf8"));
@@ -265,11 +282,177 @@ async function loadUserStore() {
   return store;
 }
 
-async function saveUserStore(store) {
+async function saveFileUserStore(store) {
   await fs.mkdir(path.dirname(USER_DB_PATH), { recursive: true });
   const tmpPath = `${USER_DB_PATH}.${crypto.randomUUID()}.tmp`;
   await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`);
   await fs.rename(tmpPath, USER_DB_PATH);
+}
+
+function requirePg() {
+  try {
+    return require("pg");
+  } catch {
+    throw new UserError("DATABASE_URL is set, but the Postgres driver is not installed. Redeploy after pushing the updated package.json.", 500);
+  }
+}
+
+function getPostgresPool() {
+  if (!DATABASE_URL) return null;
+  if (!postgresPool) {
+    const { Pool } = requirePg();
+    postgresPool = new Pool({
+      connectionString: DATABASE_URL,
+      ssl: DATABASE_URL.includes("sslmode=require") ? { rejectUnauthorized: false } : undefined,
+      max: 4,
+      idleTimeoutMillis: 30000
+    });
+  }
+  return postgresPool;
+}
+
+async function ensurePostgresSchema() {
+  const pool = getPostgresPool();
+  if (!pool || postgresSchemaReady) return;
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      username TEXT PRIMARY KEY,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('admin', 'user')),
+      status TEXT NOT NULL CHECK (status IN ('active', 'pending', 'rejected')),
+      created_at TIMESTAMPTZ NOT NULL,
+      approved_at TIMESTAMPTZ,
+      rejected_at TIMESTAMPTZ
+    );
+
+    CREATE TABLE IF NOT EXISTS reset_requests (
+      id TEXT PRIMARY KEY,
+      username TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
+      created_at TIMESTAMPTZ NOT NULL,
+      resolved_at TIMESTAMPTZ
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id BIGSERIAL PRIMARY KEY,
+      at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      event TEXT NOT NULL,
+      actor TEXT,
+      ip TEXT,
+      details JSONB NOT NULL DEFAULT '{}'::jsonb
+    );
+  `);
+
+  postgresSchemaReady = true;
+}
+
+function isoDate(value) {
+  if (!value) return undefined;
+  if (value instanceof Date) return value.toISOString();
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function dbUser(row) {
+  return {
+    username: row.username,
+    passwordHash: row.password_hash,
+    role: row.role,
+    status: row.status,
+    createdAt: isoDate(row.created_at),
+    approvedAt: isoDate(row.approved_at),
+    rejectedAt: isoDate(row.rejected_at)
+  };
+}
+
+function dbResetRequest(row) {
+  return {
+    id: row.id,
+    username: row.username,
+    passwordHash: row.password_hash,
+    status: row.status,
+    createdAt: isoDate(row.created_at),
+    resolvedAt: isoDate(row.resolved_at)
+  };
+}
+
+async function seedPostgresAdmin(pool) {
+  if (!ADMIN_PASSWORD) return;
+  await pool.query(`
+    INSERT INTO users (username, password_hash, role, status, created_at, approved_at)
+    VALUES ($1, $2, 'admin', 'active', NOW(), NOW())
+    ON CONFLICT (username) DO NOTHING
+  `, [ADMIN_USERNAME, hashPassword(ADMIN_PASSWORD)]);
+}
+
+async function loadPostgresUserStore() {
+  await ensurePostgresSchema();
+  const pool = getPostgresPool();
+  await seedPostgresAdmin(pool);
+
+  const [usersResult, resetsResult] = await Promise.all([
+    pool.query("SELECT * FROM users ORDER BY created_at ASC, username ASC"),
+    pool.query("SELECT * FROM reset_requests ORDER BY created_at ASC")
+  ]);
+
+  return {
+    users: usersResult.rows.map(dbUser),
+    resetRequests: resetsResult.rows.map(dbResetRequest)
+  };
+}
+
+function nullableDate(value) {
+  return value ? new Date(value) : null;
+}
+
+async function savePostgresUserStore(store) {
+  await ensurePostgresSchema();
+  const pool = getPostgresPool();
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM reset_requests");
+    await client.query("DELETE FROM users");
+
+    for (const user of store.users) {
+      await client.query(`
+        INSERT INTO users (username, password_hash, role, status, created_at, approved_at, rejected_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `, [
+        normalizeUsername(user.username),
+        user.passwordHash,
+        user.role,
+        user.status,
+        nullableDate(user.createdAt) || new Date(),
+        nullableDate(user.approvedAt),
+        nullableDate(user.rejectedAt)
+      ]);
+    }
+
+    for (const request of store.resetRequests) {
+      await client.query(`
+        INSERT INTO reset_requests (id, username, password_hash, status, created_at, resolved_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `, [
+        request.id,
+        normalizeUsername(request.username),
+        request.passwordHash,
+        request.status,
+        nullableDate(request.createdAt) || new Date(),
+        nullableDate(request.resolvedAt)
+      ]);
+    }
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 function findUser(store, username) {
@@ -384,6 +567,23 @@ async function audit(event, details = {}, req = null) {
   };
 
   try {
+    if (DATABASE_URL) {
+      await ensurePostgresSchema();
+      const pool = getPostgresPool();
+      const detailPayload = { ...details };
+      await pool.query(`
+        INSERT INTO audit_log (at, event, actor, ip, details)
+        VALUES ($1, $2, $3, $4, $5::jsonb)
+      `, [
+        entry.at,
+        event,
+        session ? session.username : null,
+        req ? clientIp(req) : null,
+        JSON.stringify(detailPayload)
+      ]);
+      return;
+    }
+
     await fs.mkdir(path.dirname(AUDIT_LOG_PATH), { recursive: true });
     await fs.appendFile(AUDIT_LOG_PATH, `${JSON.stringify(entry)}\n`);
   } catch (error) {
@@ -701,6 +901,151 @@ function sanitizeFileName(value, fallback = "wallet-pass") {
     .replace(/[^a-z0-9._-]+/gi, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 80) || fallback;
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value || {}));
+}
+
+function normalizeBulkKey(value) {
+  return stringValue(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function bulkRowLookup(row, candidates) {
+  if (!row || typeof row !== "object") return { found: false, value: undefined };
+
+  for (const candidate of candidates) {
+    if (Object.prototype.hasOwnProperty.call(row, candidate)) {
+      return { found: true, value: row[candidate] };
+    }
+  }
+
+  const keyMap = new Map();
+  for (const key of Object.keys(row)) {
+    keyMap.set(normalizeBulkKey(key), key);
+  }
+
+  for (const candidate of candidates) {
+    const key = keyMap.get(normalizeBulkKey(candidate));
+    if (key) return { found: true, value: row[key] };
+  }
+
+  return { found: false, value: undefined };
+}
+
+function applyBulkValue(target, key, row, candidates = [key]) {
+  const match = bulkRowLookup(row, candidates);
+  if (!match.found) return false;
+  target[key] = match.value === undefined || match.value === null ? "" : String(match.value);
+  return true;
+}
+
+function applyBulkBool(target, key, row, candidates = [key]) {
+  const match = bulkRowLookup(row, candidates);
+  if (!match.found) return false;
+  target[key] = boolValue(match.value);
+  return true;
+}
+
+function padBulkIndex(index) {
+  return String(index + 1).padStart(3, "0");
+}
+
+function uniqueZipFileName(filename, usedNames) {
+  const parsed = path.parse(sanitizeFileName(filename, "wallet-pass.pkpass"));
+  const ext = parsed.ext || ".pkpass";
+  const base = sanitizeFileName(parsed.name, "wallet-pass");
+  let candidate = `${base}${ext}`;
+  let count = 2;
+
+  while (usedNames.has(candidate)) {
+    candidate = `${base}-${count}${ext}`;
+    count += 1;
+  }
+
+  usedNames.add(candidate);
+  return candidate;
+}
+
+function applyBulkRow(template, row, index) {
+  const input = cloneJson(template);
+  input.pass = input.pass || {};
+  input.colors = input.colors || {};
+  input.barcode = input.barcode || {};
+  input.locations = Array.isArray(input.locations) ? input.locations : [];
+
+  const templateSerial = stringValue(template && template.pass && template.pass.serialNumber, "PASS");
+  const serialMatch = bulkRowLookup(row, ["serialNumber", "serial", "id", "passId"]);
+  const serialNumber = serialMatch.found && stringValue(serialMatch.value)
+    ? stringValue(serialMatch.value)
+    : `${templateSerial}-${padBulkIndex(index)}`;
+  input.pass.serialNumber = serialNumber;
+
+  const passTextKeys = [
+    "passTypeIdentifier",
+    "teamIdentifier",
+    "organizationName",
+    "description",
+    "logoText",
+    "relevantDate",
+    "expirationDate",
+    "associatedStoreIdentifiers",
+    "passStyle",
+    "transitType"
+  ];
+  for (const key of passTextKeys) applyBulkValue(input.pass, key, row);
+  applyBulkBool(input.pass, "sharingProhibited", row);
+  applyBulkBool(input.pass, "voided", row);
+
+  for (const key of ["backgroundColor", "foregroundColor", "labelColor"]) {
+    applyBulkValue(input.colors, key, row);
+  }
+
+  applyBulkBool(input.barcode, "enabled", row, ["barcodeEnabled", "includeBarcode"]);
+  applyBulkValue(input.barcode, "format", row, ["barcodeFormat", "format"]);
+  const barcodeOverridden = applyBulkValue(input.barcode, "message", row, ["barcodeMessage", "barcode", "qr", "code"]);
+  const altTextOverridden = applyBulkValue(input.barcode, "altText", row, ["barcodeAltText", "altText"]);
+  applyBulkValue(input.barcode, "encoding", row, ["barcodeEncoding", "messageEncoding"]);
+
+  const templateBarcodeMessage = stringValue(template && template.barcode && template.barcode.message);
+  if (!barcodeOverridden && templateBarcodeMessage === templateSerial) {
+    input.barcode.message = serialNumber;
+  }
+  if (!altTextOverridden && stringValue(template && template.barcode && template.barcode.altText) === templateSerial) {
+    input.barcode.altText = serialNumber;
+  }
+
+  const latitude = bulkRowLookup(row, ["locationLatitude", "latitude", "lat"]);
+  const longitude = bulkRowLookup(row, ["locationLongitude", "longitude", "lng", "lon"]);
+  const relevantText = bulkRowLookup(row, ["locationText", "relevantText"]);
+  if (latitude.found || longitude.found || relevantText.found) {
+    input.locations = [{
+      latitude: latitude.found ? latitude.value : "",
+      longitude: longitude.found ? longitude.value : "",
+      relevantText: relevantText.found ? relevantText.value : ""
+    }];
+  }
+
+  const fieldCollections = [
+    ["primaryFields", "primary"],
+    ["secondaryFields", "secondary"],
+    ["auxiliaryFields", "auxiliary"],
+    ["backFields", "back"]
+  ];
+
+  for (const [collection, prefix] of fieldCollections) {
+    if (!Array.isArray(input[collection])) continue;
+    for (const field of input[collection]) {
+      const key = stringValue(field.key);
+      if (!key) continue;
+      const match = bulkRowLookup(row, [key, `${prefix}.${key}`, `${collection}.${key}`]);
+      if (match.found) field.value = match.value === undefined || match.value === null ? "" : String(match.value);
+    }
+  }
+
+  return input;
 }
 
 function sanitizeKey(value, fallback) {
@@ -1233,6 +1578,59 @@ async function handleGenerate(req, res) {
   res.end(result.data);
 }
 
+async function handleGenerateBulk(req, res) {
+  checkRateLimit(req, "generate");
+  const input = await collectJson(req);
+  const template = input.template || {};
+  const rows = Array.isArray(input.rows) ? input.rows : [];
+
+  if (!rows.length) throw new UserError("Add at least one bulk row.");
+  if (rows.length > MAX_BULK_PASSES) {
+    throw new UserError(`Bulk creation is limited to ${MAX_BULK_PASSES} passes at a time.`);
+  }
+
+  validateUploadPayloads(template);
+
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "wallet-pass-bulk-"));
+  const zipDir = path.join(tmpRoot, "passes");
+  const zipPath = path.join(tmpRoot, "wallet-passes.zip");
+  const usedNames = new Set();
+
+  try {
+    await fs.mkdir(zipDir, { recursive: true });
+
+    for (const [index, row] of rows.entries()) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) {
+        throw new UserError(`Bulk row ${index + 1} is not valid.`);
+      }
+
+      const rowInput = applyBulkRow(template, row, index);
+      const result = await generatePass(rowInput);
+      const filename = uniqueZipFileName(result.filename, usedNames);
+      await fs.writeFile(path.join(zipDir, filename), result.data);
+    }
+
+    await packagePass(zipDir, zipPath);
+    const data = await fs.readFile(zipPath);
+    const session = readSession(req);
+    await audit("bulk_passes_generated", {
+      username: session ? session.username : null,
+      count: rows.length,
+      passStyle: stringValue(template.pass && template.pass.passStyle, "generic")
+    }, req);
+
+    res.writeHead(200, {
+      "content-type": "application/zip",
+      "content-disposition": `attachment; filename="wallet-passes.zip"`,
+      "content-length": data.length,
+      "cache-control": "no-store"
+    });
+    res.end(data);
+  } finally {
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+}
+
 function makeDefaultPassPng(width, height, hexColor) {
   const bg = parseHexColor(hexColor, "#1d4ed8");
   const image = Buffer.alloc(width * height * 4);
@@ -1322,7 +1720,10 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
 
     if (req.method === "GET" && url.pathname === "/healthz") {
-      sendJson(res, 200, { ok: true });
+      sendJson(res, 200, {
+        ok: true,
+        storage: DATABASE_URL ? "postgres" : "file"
+      });
       return;
     }
 
@@ -1422,6 +1823,11 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/generate") {
       await handleGenerate(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/generate-bulk") {
+      await handleGenerateBulk(req, res);
       return;
     }
 

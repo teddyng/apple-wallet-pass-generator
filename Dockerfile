@@ -4,7 +4,9 @@ RUN apk add --no-cache openssl zip
 
 WORKDIR /app
 
-COPY package.json ./
+COPY package*.json ./
+RUN npm install --omit=dev
+
 COPY server.js ./
 COPY public ./public
 

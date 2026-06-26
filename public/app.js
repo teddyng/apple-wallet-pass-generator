@@ -22,6 +22,8 @@ const state = {
 const fieldKinds = ["primaryFields", "secondaryFields", "auxiliaryFields", "backFields"];
 const IMAGE_FILE_LIMIT = 8 * 1024 * 1024;
 const SIGNING_FILE_LIMIT = 5 * 1024 * 1024;
+const MAX_BULK_ROWS = 50;
+const imagePreviewKeys = new Set(["icon", "logo", "strip", "thumbnail", "background", "footer"]);
 const signingFileKeys = new Set(["p12", "wwdrP12", "certificate", "privateKey", "wwdrPem"]);
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -206,6 +208,176 @@ function colorAsRgb(hex) {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
+function hashString(value) {
+  let hash = 2166136261;
+  for (const char of String(value || "")) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function cellHash(seed, x, y = 0) {
+  return hashString(`${seed}:${x}:${y}`);
+}
+
+function prepareBarcodeCanvas(width, height) {
+  const canvas = $("#barcodeCanvas");
+  const ratio = Math.max(1, window.devicePixelRatio || 1);
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+  canvas.width = Math.round(width * ratio);
+  canvas.height = Math.round(height * ratio);
+
+  const context = canvas.getContext("2d");
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, width, height);
+  context.fillStyle = "#111111";
+  return { context, width, height };
+}
+
+function fillModule(context, start, cell, x, y, size = 1) {
+  context.fillRect(
+    Math.round(start + x * cell),
+    Math.round(start + y * cell),
+    Math.ceil(cell * size),
+    Math.ceil(cell * size)
+  );
+}
+
+function drawFinder(context, start, cell, x, y) {
+  context.fillStyle = "#111111";
+  fillModule(context, start, cell, x, y, 7);
+  context.fillStyle = "#ffffff";
+  fillModule(context, start, cell, x + 1, y + 1, 5);
+  context.fillStyle = "#111111";
+  fillModule(context, start, cell, x + 2, y + 2, 3);
+}
+
+function inQrFinderArea(x, y, modules) {
+  return (
+    (x < 8 && y < 8) ||
+    (x >= modules - 8 && y < 8) ||
+    (x < 8 && y >= modules - 8)
+  );
+}
+
+function drawQrPreview(message, format) {
+  const { context, width } = prepareBarcodeCanvas(156, 156);
+  const modules = 29;
+  const cell = Math.floor((width - 18) / modules);
+  const start = Math.floor((width - cell * modules) / 2);
+  const seed = `${format}:${message}`;
+
+  context.fillStyle = "#111111";
+  for (let y = 0; y < modules; y += 1) {
+    for (let x = 0; x < modules; x += 1) {
+      if (inQrFinderArea(x, y, modules)) continue;
+      if ((cellHash(seed, x, y) % 9) < 4) fillModule(context, start, cell, x, y);
+    }
+  }
+
+  drawFinder(context, start, cell, 0, 0);
+  drawFinder(context, start, cell, modules - 7, 0);
+  drawFinder(context, start, cell, 0, modules - 7);
+}
+
+function drawAztecPreview(message) {
+  const { context, width } = prepareBarcodeCanvas(156, 156);
+  const modules = 31;
+  const cell = Math.floor((width - 18) / modules);
+  const start = Math.floor((width - cell * modules) / 2);
+  const center = Math.floor(modules / 2);
+  const seed = `aztec:${message}`;
+
+  context.fillStyle = "#111111";
+  for (let y = 0; y < modules; y += 1) {
+    for (let x = 0; x < modules; x += 1) {
+      const inCenter = Math.abs(x - center) <= 5 && Math.abs(y - center) <= 5;
+      if (!inCenter && (cellHash(seed, x, y) % 10) < 4) {
+        fillModule(context, start, cell, x, y);
+      }
+    }
+  }
+
+  for (let ring = 5; ring >= 0; ring -= 1) {
+    context.fillStyle = ring % 2 === 0 ? "#111111" : "#ffffff";
+    fillModule(context, start, cell, center - ring, center - ring, ring * 2 + 1);
+  }
+}
+
+function drawPdf417Preview(message) {
+  const { context, width, height } = prepareBarcodeCanvas(190, 86);
+  const rows = 5;
+  const margin = 10;
+  const rowHeight = (height - margin * 2) / rows;
+  const unit = (width - margin * 2) / 74;
+  const seed = `pdf417:${message}`;
+
+  context.fillStyle = "#111111";
+  for (let row = 0; row < rows; row += 1) {
+    const top = margin + row * rowHeight;
+    context.fillRect(margin, top, unit * 2, rowHeight * 0.78);
+    context.fillRect(width - margin - unit * 2, top, unit * 2, rowHeight * 0.78);
+
+    let x = margin + unit * 5;
+    let column = 0;
+    while (x < width - margin - unit * 5) {
+      const darkWidth = 1 + (cellHash(seed, column, row) % 4);
+      const lightWidth = 1 + (cellHash(seed, column + 91, row) % 3);
+      context.fillRect(x, top, Math.max(1, darkWidth * unit), rowHeight * 0.78);
+      x += (darkWidth + lightWidth) * unit;
+      column += 1;
+    }
+  }
+}
+
+function drawCode128Preview(message) {
+  const { context, width, height } = prepareBarcodeCanvas(190, 76);
+  const margin = 12;
+  const seed = `code128:${message}`;
+  let x = margin;
+  let column = 0;
+
+  context.fillStyle = "#111111";
+  for (const widthUnit of [2, 1, 1, 2, 1, 2]) {
+    context.fillRect(x, margin, widthUnit * 2, height - margin * 2);
+    x += widthUnit * 4;
+  }
+
+  while (x < width - margin - 12) {
+    const barWidth = 1 + (cellHash(seed, column) % 4);
+    const gapWidth = 1 + (cellHash(seed, column + 53) % 3);
+    context.fillRect(x, margin, barWidth * 2, height - margin * 2);
+    x += (barWidth + gapWidth) * 2;
+    column += 1;
+  }
+
+  context.fillRect(width - margin - 8, margin, 3, height - margin * 2);
+  context.fillRect(width - margin - 2, margin, 2, height - margin * 2);
+}
+
+function updateBarcodePreview() {
+  const barcodeEnabled = checked("barcodeEnabled") && read("barcodeMessage");
+  $("#barcodePreview").classList.toggle("is-hidden", !barcodeEnabled);
+  $("#previewBarcodeText").textContent = read("barcodeAltText") || read("barcodeMessage");
+
+  if (!barcodeEnabled) return;
+
+  const format = read("barcodeFormat");
+  const message = read("barcodeMessage");
+  if (format === "PKBarcodeFormatPDF417") {
+    drawPdf417Preview(message);
+  } else if (format === "PKBarcodeFormatCode128") {
+    drawCode128Preview(message);
+  } else if (format === "PKBarcodeFormatAztec") {
+    drawAztecPreview(message);
+  } else {
+    drawQrPreview(message, format);
+  }
+}
+
 function updatePreview() {
   const passPreview = $("#passPreview");
   const foregroundColor = read("foregroundColor");
@@ -236,9 +408,7 @@ function updatePreview() {
     .map((field) => fieldMarkup(field))
     .join("");
 
-  const barcodeEnabled = checked("barcodeEnabled") && read("barcodeMessage");
-  $("#barcodePreview").classList.toggle("is-hidden", !barcodeEnabled);
-  $("#previewBarcodeText").textContent = read("barcodeAltText") || read("barcodeMessage");
+  updateBarcodePreview();
   $("#jsonPreview").textContent = JSON.stringify(passJsonPreview(), null, 2);
   syncStatus();
 }
@@ -290,6 +460,21 @@ function fileToPayload(file) {
   });
 }
 
+function updateImageUploadPreview(fileKey, payload) {
+  if (!imagePreviewKeys.has(fileKey)) return;
+
+  const preview = $(`[data-image-preview="${fileKey}"]`);
+  if (!preview) return;
+
+  const image = $("img", preview);
+  const hasImage = Boolean(payload && payload.data);
+  preview.classList.toggle("is-empty", !hasImage);
+
+  if (image) {
+    image.src = hasImage ? `data:${payload.type || "image/png"};base64,${payload.data}` : "";
+  }
+}
+
 async function bindFileInput(inputId, fileKey, displayKey) {
   const input = $(`#${inputId}`);
   const label = $(`[data-file-name="${displayKey || fileKey}"]`);
@@ -298,6 +483,7 @@ async function bindFileInput(inputId, fileKey, displayKey) {
     if (!file) {
       state.files[fileKey] = null;
       if (label) label.textContent = "None";
+      updateImageUploadPreview(fileKey, null);
       return;
     }
 
@@ -308,10 +494,12 @@ async function bindFileInput(inputId, fileKey, displayKey) {
       }
       state.files[fileKey] = await fileToPayload(file);
       if (label) label.textContent = file.name;
+      updateImageUploadPreview(fileKey, state.files[fileKey]);
       syncStatus();
     } catch (error) {
       state.files[fileKey] = null;
       if (label) label.textContent = "Unreadable";
+      updateImageUploadPreview(fileKey, null);
       lockStatus(error.message, "error", 8000);
     }
   });
@@ -389,6 +577,105 @@ function collectPayload() {
   return payload;
 }
 
+function parseCsvTable(text) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (char === '"' && quoted && next === '"') {
+      cell += '"';
+      index += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+
+    if (char === "," && !quoted) {
+      row.push(cell);
+      cell = "";
+      continue;
+    }
+
+    if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+      continue;
+    }
+
+    cell += char;
+  }
+
+  row.push(cell);
+  rows.push(row);
+  return rows.filter((item) => item.some((value) => value.trim()));
+}
+
+function parseBulkRows() {
+  const raw = $("#bulkRows").value;
+  const table = parseCsvTable(raw);
+  if (table.length < 2) return [];
+
+  const headers = table[0].map((header) => header.trim());
+  return table.slice(1)
+    .map((cells) => {
+      const row = {};
+      headers.forEach((header, index) => {
+        if (!header) return;
+        row[header] = String(cells[index] || "").trim();
+      });
+      return row;
+    })
+    .filter((row) => Object.values(row).some((value) => String(value).trim()));
+}
+
+function updateBulkCount() {
+  const count = $("#bulkCount");
+  if (!count) return;
+  const rows = parseBulkRows();
+  const label = rows.length === 1 ? "row" : "rows";
+  count.textContent = `${rows.length} ${label}`;
+  count.classList.toggle("is-error", rows.length > MAX_BULK_ROWS);
+}
+
+function filenameFromResponse(response, fallback) {
+  const disposition = response.headers.get("content-disposition") || "";
+  const match = disposition.match(/filename="([^"]+)"/);
+  return match ? match[1] : fallback;
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+async function responseError(response, fallback) {
+  const text = await response.text();
+  try {
+    const payload = JSON.parse(text);
+    if (payload.error) return new Error(payload.error);
+  } catch {
+    // Plain text errors are still useful when the server did not return JSON.
+  }
+  return new Error(text || fallback);
+}
+
 async function generatePass() {
   const button = $("#generateButton");
   button.disabled = true;
@@ -402,33 +689,63 @@ async function generatePass() {
     });
 
     if (!response.ok) {
-      let message = "Could not generate pass.";
-      try {
-        const payload = await response.json();
-        if (payload.error) message = payload.error;
-      } catch {
-        message = await response.text();
-      }
-      throw new Error(message);
+      throw await responseError(response, "Could not generate pass.");
     }
 
     const blob = await response.blob();
-    const disposition = response.headers.get("content-disposition") || "";
-    const match = disposition.match(/filename="([^"]+)"/);
-    const filename = match ? match[1] : `${read("serialNumber") || "wallet-pass"}.pkpass`;
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+    const filename = filenameFromResponse(response, `${read("serialNumber") || "wallet-pass"}.pkpass`);
+    downloadBlob(blob, filename);
     lockStatus(`Downloaded ${filename}`, "success", 6000);
     window.setTimeout(syncStatus, 6500);
   } catch (error) {
     lockStatus(error.message || "Could not generate pass.", "error", 8000);
     window.setTimeout(syncStatus, 8500);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function generateBulkPasses() {
+  const button = $("#bulkGenerateButton");
+  const rows = parseBulkRows();
+
+  if (!rows.length) {
+    lockStatus("Add bulk CSV rows first.", "error", 7000);
+    window.setTimeout(syncStatus, 7500);
+    return;
+  }
+
+  if (rows.length > MAX_BULK_ROWS) {
+    lockStatus(`Bulk creation is limited to ${MAX_BULK_ROWS} passes at a time.`, "error", 7000);
+    window.setTimeout(syncStatus, 7500);
+    return;
+  }
+
+  button.disabled = true;
+  lockStatus(`Generating ${rows.length} passes...`, "", 180000);
+
+  try {
+    const response = await fetch("/api/generate-bulk", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        template: collectPayload(),
+        rows
+      })
+    });
+
+    if (!response.ok) {
+      throw await responseError(response, "Could not generate bulk passes.");
+    }
+
+    const blob = await response.blob();
+    const filename = filenameFromResponse(response, "wallet-passes.zip");
+    downloadBlob(blob, filename);
+    lockStatus(`Downloaded ${filename}`, "success", 6000);
+    window.setTimeout(syncStatus, 6500);
+  } catch (error) {
+    lockStatus(error.message || "Could not generate bulk passes.", "error", 9000);
+    window.setTimeout(syncStatus, 9500);
   } finally {
     button.disabled = false;
   }
@@ -462,6 +779,7 @@ function bindEvents() {
   });
 
   $("#generateButton").addEventListener("click", generatePass);
+  $("#bulkGenerateButton").addEventListener("click", generateBulkPasses);
 
   $("#passForm").addEventListener("input", (event) => {
     const row = event.target.closest(".field-row");
@@ -469,6 +787,8 @@ function bindEvents() {
       const { kind, index } = row.dataset;
       state[kind][Number(index)][event.target.dataset.field] = event.target.value;
     }
+
+    if (event.target.id === "bulkRows") updateBulkCount();
 
     const isBoarding = read("passStyle") === "boardingPass";
     $$(".boarding-only").forEach((node) => node.classList.toggle("is-hidden", !isBoarding));
@@ -511,4 +831,5 @@ function bindEvents() {
 renderAllFieldRows();
 bindEvents();
 loadCurrentUser();
+updateBulkCount();
 updatePreview();

@@ -12,7 +12,7 @@
       <header class="topbar">
         <div class="title-block">
           <span class="eyebrow">Apple Wallet</span>
-          <h1>Wallet Pass Studio</h1>
+          <h1>Wallet Pass Studio <span class="version-badge">v1.3.0</span></h1>
         </div>
         <div class="top-actions">
           <a class="secondary-button is-hidden" id="adminLink" href="/admin">Admin</a>
@@ -30,6 +30,7 @@
           <div class="tabs" role="tablist" aria-label="Pass editor sections">
             <button type="button" class="tab is-active" data-tab="details">Details</button>
             <button type="button" class="tab" data-tab="fields">Fields</button>
+            <button type="button" class="tab" data-tab="bulk">Bulk</button>
             <button type="button" class="tab" data-tab="barcode">Barcode</button>
             <button type="button" class="tab" data-tab="images">Images</button>
             <button type="button" class="tab" data-tab="signing">Signing</button>
@@ -189,6 +190,28 @@
             </div>
           </section>
 
+          <section class="panel" data-panel="bulk">
+            <div class="panel-heading">
+              <h2>Bulk Create</h2>
+            </div>
+
+            <label class="textarea-field">
+              <span>CSV Rows</span>
+              <textarea id="bulkRows" class="bulk-textarea" spellcheck="false">serialNumber,barcodeMessage,reward,member,points,tier
+ACME-20001,ACME-20001,Free Coffee,Jordan Lee,1420,Gold
+ACME-20002,ACME-20002,Free Tea,Sam Patel,980,Silver
+ACME-20003,ACME-20003,Free Pastry,Chris Wong,2100,Platinum</textarea>
+            </label>
+
+            <div class="bulk-actions">
+              <button class="primary-button" id="bulkGenerateButton" type="button">
+                <span aria-hidden="true">↓</span>
+                Generate ZIP
+              </button>
+              <span class="bulk-count" id="bulkCount">3 rows</span>
+            </div>
+          </section>
+
           <section class="panel" data-panel="barcode">
             <div class="panel-heading">
               <h2>Barcode</h2>
@@ -235,31 +258,49 @@
             <div class="upload-grid">
               <label class="file-control">
                 <span>Icon PNG</span>
+                <span class="image-preview is-empty" data-image-preview="icon" aria-hidden="true">
+                  <img alt="">
+                </span>
                 <input type="file" id="iconFile" accept="image/png">
                 <strong data-file-name="icon">Default</strong>
               </label>
               <label class="file-control">
                 <span>Logo PNG</span>
+                <span class="image-preview is-empty" data-image-preview="logo" aria-hidden="true">
+                  <img alt="">
+                </span>
                 <input type="file" id="logoFile" accept="image/png">
                 <strong data-file-name="logo">None</strong>
               </label>
               <label class="file-control">
                 <span>Strip PNG</span>
+                <span class="image-preview is-empty image-preview-wide" data-image-preview="strip" aria-hidden="true">
+                  <img alt="">
+                </span>
                 <input type="file" id="stripFile" accept="image/png">
                 <strong data-file-name="strip">None</strong>
               </label>
               <label class="file-control">
                 <span>Thumbnail PNG</span>
+                <span class="image-preview is-empty" data-image-preview="thumbnail" aria-hidden="true">
+                  <img alt="">
+                </span>
                 <input type="file" id="thumbnailFile" accept="image/png">
                 <strong data-file-name="thumbnail">None</strong>
               </label>
               <label class="file-control">
                 <span>Background PNG</span>
+                <span class="image-preview is-empty image-preview-wide" data-image-preview="background" aria-hidden="true">
+                  <img alt="">
+                </span>
                 <input type="file" id="backgroundFile" accept="image/png">
                 <strong data-file-name="background">None</strong>
               </label>
               <label class="file-control">
                 <span>Footer PNG</span>
+                <span class="image-preview is-empty image-preview-wide" data-image-preview="footer" aria-hidden="true">
+                  <img alt="">
+                </span>
                 <input type="file" id="footerFile" accept="image/png">
                 <strong data-file-name="footer">None</strong>
               </label>
@@ -357,7 +398,7 @@
                 <div class="preview-primary" id="previewPrimary"></div>
                 <div class="preview-secondary" id="previewSecondary"></div>
                 <div class="barcode-preview" id="barcodePreview">
-                  <div class="barcode-grid" aria-hidden="true"></div>
+                  <canvas class="barcode-canvas" id="barcodeCanvas" width="156" height="156" aria-hidden="true"></canvas>
                   <span id="previewBarcodeText">ACME-10001</span>
                 </div>
               </section>
@@ -371,7 +412,7 @@
       </div>
 
       <footer class="site-footer">
-        <span>Created by Teddy Ng. Powered by Codex. Hosted by Render.</span>
+        <span>Created by Teddy Ng. Powered by Codex. Hosted by Render and Neon.</span>
         <span class="status-pill" id="statusText" role="status">Checking setup...</span>
       </footer>
     </main>

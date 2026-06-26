@@ -13,7 +13,8 @@ Render is the simplest free backend option for this app because it can run the N
 5. Choose the **Free** instance type.
 6. Add an `ADMIN_PASSWORD` environment variable.
 7. Let Render generate `SESSION_SECRET` from `render.yaml`, or set your own long random value.
-8. Deploy.
+8. For free persistent accounts, add `DATABASE_URL` from Neon Postgres.
+9. Deploy.
 
 Render will provide a public HTTPS URL after deployment. The included `Dockerfile` installs the native tools this app needs, and `render.yaml` sets the hosted server to listen correctly and health-check `/healthz`.
 
@@ -27,25 +28,50 @@ The default hosted username is `admin`. Set a strong `ADMIN_PASSWORD`; do not co
 - Never commit `.p12`, `.pem`, `.key`, `.cer`, `.crt`, `.der`, or Apple certificate files.
 - Confirm the pass `passTypeIdentifier` exactly matches the Apple Pass Type ID certificate.
 - Use persistent storage or a database before relying on hosted user accounts.
+- For a free database, use Neon Postgres and set `DATABASE_URL`.
 - Test login, account approval, password reset, and one generated pass before sharing the URL.
 
 The app includes:
 
 - Login-protected pass generation.
+- Bulk pass creation from CSV rows.
 - User account requests that require admin approval.
 - User deletion from the admin page.
 - Password reset requests that require admin approval.
 - Login/account/password-reset rate limiting.
 - Upload size/type checks for images and signing files.
+- Image previews for uploaded pass artwork.
 - Admin audit logging to `data/audit.log`.
 - A sticky footer with live app status.
+- A live barcode preview in the pass editor.
 - Light/dark mode.
 
 Admin tools are available at `/admin` after signing in as an admin.
 
-Account data is stored in `data/users.json` by default. On free hosted containers this file may be reset when the service is rebuilt or redeployed. For durable production accounts, set `USER_DB_PATH` to a persistent disk path or replace the file store with a database.
+Account data is stored in Postgres when `DATABASE_URL` is set. Without `DATABASE_URL`, it falls back to `data/users.json`. On free hosted containers, local files may be reset when the service is rebuilt or redeployed.
 
-Audit logs are stored in `data/audit.log` by default. Logs contain account/admin action metadata only; they do not contain passwords or signing file contents.
+Audit logs are stored in Postgres when `DATABASE_URL` is set, or `data/audit.log` locally. Logs contain account/admin action metadata only; they do not contain passwords or signing file contents.
+
+## Free persistent storage with Neon
+
+1. Create a free Neon Postgres project.
+2. Copy the pooled connection string.
+3. In Render, add:
+
+```text
+DATABASE_URL=postgresql://...sslmode=require
+```
+
+4. Redeploy the Render service.
+5. Open `/healthz` on your Render URL.
+
+You should see:
+
+```json
+{"ok":true,"storage":"postgres"}
+```
+
+If it says `"storage":"file"`, Render does not have `DATABASE_URL` set for this service.
 
 ## Run
 

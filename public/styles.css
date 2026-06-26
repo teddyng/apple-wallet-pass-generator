@@ -96,6 +96,14 @@ h1 {
   font-weight: 800;
 }
 
+.version-badge {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
 .top-actions {
   display: flex;
   align-items: center;
@@ -414,6 +422,45 @@ input[type="color"] {
   align-content: center;
 }
 
+.image-preview {
+  width: min(100%, 160px);
+  height: 92px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(45deg, rgba(104, 112, 124, 0.12) 25%, transparent 25% 75%, rgba(104, 112, 124, 0.12) 75%),
+    linear-gradient(45deg, rgba(104, 112, 124, 0.12) 25%, transparent 25% 75%, rgba(104, 112, 124, 0.12) 75%),
+    var(--surface);
+  background-position: 0 0, 8px 8px;
+  background-size: 16px 16px;
+  overflow: hidden;
+}
+
+.image-preview-wide {
+  width: 100%;
+}
+
+.image-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+  object-fit: contain;
+}
+
+.image-preview.is-empty::before {
+  content: "";
+  width: 28px;
+  height: 22px;
+  border: 2px solid var(--line);
+  border-radius: 5px;
+}
+
+.image-preview.is-empty img {
+  display: none;
+}
+
 .file-control input {
   min-height: auto;
   padding: 0;
@@ -459,6 +506,37 @@ input[type="color"] {
 
 .signing-mode.is-active {
   display: block;
+}
+
+.bulk-textarea {
+  min-height: 240px;
+}
+
+.bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.bulk-count {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.bulk-count.is-error {
+  color: var(--danger);
+  background: #fff4f2;
+  border-color: #f2b8b5;
 }
 
 .is-hidden {
@@ -579,13 +657,9 @@ input[type="color"] {
   color: #202124;
 }
 
-.barcode-grid {
-  width: 118px;
-  aspect-ratio: 1;
-  background:
-    linear-gradient(90deg, #111 10px, transparent 10px 18px, #111 18px 26px, transparent 26px 34px, #111 34px 42px, transparent 42px),
-    linear-gradient(#111 9px, transparent 9px 17px, #111 17px 25px, transparent 25px 33px, #111 33px 41px, transparent 41px);
-  background-size: 42px 42px;
+.barcode-canvas {
+  display: block;
+  max-width: 100%;
   image-rendering: pixelated;
 }
 
@@ -843,7 +917,8 @@ input[type="color"] {
 
 [data-theme="dark"] .login-message,
 [data-theme="dark"] .admin-status.is-error,
-[data-theme="dark"] .status-pill.is-error {
+[data-theme="dark"] .status-pill.is-error,
+[data-theme="dark"] .bulk-count.is-error {
   background: rgba(127, 29, 29, 0.26);
   border-color: rgba(248, 113, 113, 0.35);
 }
